@@ -627,39 +627,48 @@ class QCVWebEngine:
         return out
 
     def _check_relevance(self, data: dict, jd_text: str) -> str:
-        """Quick LLM check on extracted JSON: returns HIGH, MEDIUM, or LOW."""
-        try:
-            title = data.get("basics", {}).get("current_title", "")
-            skills = data.get("skills", {})
-            skills_flat = ", ".join(s for cat in skills.values() if isinstance(cat, list) for s in cat[:10])
-            # Include first experience role for better context
-            exp_summary = ""
-            for exp in (data.get("experience") or [])[:2]:
-                exp_summary += f"{exp.get('role', '')} at {exp.get('company_name', '')}. "
-            prompt = (
-                f"Is this candidate's PROFESSIONAL DOMAIN relevant to the job description? "
-                f"Focus on the candidate's job title, industry, and core technical skills. "
-                f"Answer HIGH if the candidate works in the same professional field. "
-                f"Answer MEDIUM if there is meaningful overlap in technologies or transferable technical skills. "
-                f"Answer LOW if the candidate works in a completely different industry with no relevant technical overlap "
-                f"(e.g. agriculture/farming vs software engineering, hospitality vs data science). "
-                f"Reply with ONLY one word: HIGH, MEDIUM, or LOW.\n\n"
-                f"Candidate title: {title}\nRecent roles: {exp_summary}\nSkills: {skills_flat[:500]}\n\n"
-                f"Job Description (first 1000 chars):\n{jd_text[:1000]}"
-            )
-            raw = call_llm_json.__wrapped__(prompt, self.model_name) if hasattr(call_llm_json, '__wrapped__') else None
-            # Use direct LLM call instead of call_llm_json (which expects JSON response)
-            client = core._make_genai_client(
-                self.config.get("gemini_api_key") or self.config.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
-            )
-            resp = core._retry_generate(client, self.model_name, prompt)
-            result = (resp.text or "").strip().upper()
-            for word in result.split():
-                if word in ("HIGH", "MEDIUM", "LOW"):
-                    return word
-        except Exception:
-            pass
-        return "MEDIUM"
+        """Deterministic relevance check: compare CV skills/roles with JD keywords."""
+        # Extract all meaningful words from JD (3+ chars, lowercased)
+        jd_words = set(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', jd_text))
+
+        # Collect candidate's skills, tools, role titles
+        cv_terms = set()
+        for cat_items in (data.get("skills") or {}).values():
+            if isinstance(cat_items, list):
+                for s in cat_items:
+                    cv_terms.update(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', str(s)))
+        for exp in (data.get("experience") or []):
+            role = str(exp.get("role", ""))
+            cv_terms.update(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', role))
+            for env_item in (exp.get("environment") or []):
+                cv_terms.update(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', str(env_item)))
+        title = str(data.get("basics", {}).get("current_title", ""))
+        cv_terms.update(w.lower() for w in re.findall(r'[A-Za-z#+.]{3,}', title))
+
+        # Remove common stop words
+        stop = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were',
+                'has', 'have', 'been', 'will', 'can', 'not', 'but', 'also', 'such', 'other',
+                'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
+                'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
+                'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
+                'team', 'teams', 'including', 'across', 'within', 'using', 'based'}
+        jd_words -= stop
+        cv_terms -= stop
+
+        overlap = jd_words & cv_terms
+        # Calculate overlap ratio relative to JD keywords
+        if not jd_words:
+            return "MEDIUM"
+        ratio = len(overlap) / len(jd_words)
+        print(f"[Relevance] JD words: {len(jd_words)}, CV terms: {len(cv_terms)}, "
+              f"overlap: {len(overlap)} ({ratio*100:.1f}%) => {overlap}")
+
+        if ratio >= 0.20:
+            return "HIGH"
+        elif ratio >= 0.10:
+            return "MEDIUM"
+        else:
+            return "LOW"
 
     def _apply_tailor(self, data: dict, jd_text: str) -> dict:
         """Tailor the extracted CV JSON to match a Job Description."""
@@ -827,8 +836,8 @@ class QCVWebEngine:
             if not force_tailor:
                 self._status(status_cb, "Checking relevance", 65)
                 relevance = self._check_relevance(data, jd_text)
-                if relevance == "LOW":
-                    raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
+                if relevance in ("LOW", "MEDIUM"):
+                    raise LowRelevanceError(f"Relevance: {relevance}. This CV does not appear relevant to the provided Job Description.")
             self._status(status_cb, "Tailoring to JD", 70)
             data = self._apply_tailor(data, jd_text)
 
