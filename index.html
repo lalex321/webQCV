@@ -707,7 +707,7 @@
             const formData = new FormData();
             formData.append("file", lastSubmittedFile);
             formData.append("template_name", templateSelect.value);
-            formData.append("anonymize", anonInput.checked ? "true" : "false");
+            formData.append("anonymize", anonymizeInput.checked ? "true" : "false");
             formData.append("autofix", "false");
             formData.append("tailor", "true");
             formData.append("jd_text", jdText.value.trim());
