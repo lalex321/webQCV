@@ -332,11 +332,14 @@ def _pre_screen_relevance(data: dict, jd_text: str) -> str:
         skills = data.get("skills", {})
         skills_flat = ", ".join(s for cat in skills.values() if isinstance(cat, list) for s in cat[:10])
         prompt = (
-            f"Does this candidate have ANY transferable skills or experience relevant to the job description? "
-            f"Be lenient — if there is even partial overlap in technologies, domain, or role type, answer HIGH or MEDIUM. "
-            f"Only answer LOW if the candidate's background is completely unrelated (e.g. a farmer applying for a software role). "
+            f"Is this candidate's PROFESSIONAL DOMAIN relevant to the job description? "
+            f"Focus on the candidate's job title and core industry — ignore generic skills like 'teamwork' or 'quality control'. "
+            f"Answer HIGH if the candidate works in the same professional field. "
+            f"Answer MEDIUM if there is meaningful overlap in technologies or transferable technical skills. "
+            f"Answer LOW if the candidate works in a completely different industry with no relevant technical overlap "
+            f"(e.g. agriculture/farming/veterinary vs software engineering, or retail vs data science). "
             f"Reply with ONLY one word: HIGH, MEDIUM, or LOW.\n\n"
-            f"Candidate: {name}, {title}\nSkills: {skills_flat[:500]}\n\n"
+            f"Candidate title: {title}\nCandidate skills: {skills_flat[:500]}\n\n"
             f"Job Description (first 1000 chars):\n{jd_text[:1000]}"
         )
         client = _core._make_genai_client(_core.load_config().get("api_key", "") or os.environ.get("GEMINI_API_KEY", ""))
