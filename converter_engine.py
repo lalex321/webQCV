@@ -117,6 +117,10 @@ class InMemoryJobStore:
             if debug is not None:
                 job.debug = debug
 
+    def active_count(self) -> int:
+        with self._lock:
+            return sum(1 for j in self._jobs.values() if j.status not in ("Done", "Failed", "Low Relevance", "Queued"))
+
 
 
 def _slug_part(value: str) -> str:

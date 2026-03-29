@@ -29,6 +29,7 @@ TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
+_SERVER_START = time.time()
 
 
 def append_usage(event: dict) -> None:
@@ -269,6 +270,26 @@ def index():
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
     return index_path.read_text(encoding="utf-8")
+
+
+@app.get("/stats")
+def server_stats():
+    today = time.strftime("%Y-%m-%d")
+    events = _read_usage_events()
+    today_done = sum(1 for e in events if e.get("event") == "done" and e.get("ts", "").startswith(today))
+    today_failed = sum(1 for e in events if e.get("event") == "failed" and e.get("ts", "").startswith(today))
+    total_done = sum(1 for e in events if e.get("event") == "done")
+    uptime_sec = int(time.time() - _SERVER_START)
+    h, rem = divmod(uptime_sec, 3600)
+    m, s = divmod(rem, 60)
+    uptime_str = f"{h}h {m}m" if h else f"{m}m {s}s"
+    return {
+        "active_jobs": jobs.active_count(),
+        "today_processed": today_done,
+        "today_failed": today_failed,
+        "total_processed": total_done,
+        "uptime": uptime_str,
+    }
 
 
 @app.get("/templates")

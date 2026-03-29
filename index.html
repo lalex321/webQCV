@@ -37,6 +37,24 @@
       font-size:14px;
       margin-bottom:12px;
     }
+    .stats-bar{
+      margin-left:auto;
+      font-weight:400;
+      font-size:12px;
+      color:var(--muted);
+      display:flex;
+      gap:14px;
+      opacity:0.85;
+    }
+    .stats-bar .stat-dot{
+      display:inline-block;
+      width:7px;height:7px;border-radius:50%;
+      margin-right:4px;
+      vertical-align:middle;
+    }
+    .stat-dot.green{background:#22c55e;}
+    .stat-dot.amber{background:#f59e0b;}
+    .stat-dot.red{background:#ef4444;}
     .dotwrap{
       width:20px;height:20px;border-radius:999px;
       background:#e8edf4;
@@ -313,6 +331,11 @@
     <div class="topbar">
       <img class="brand-logo" src="/images/Quantori_logo.png" alt="Quantori" />
       <div>Quantori </div>
+      <div class="stats-bar" id="statsBar">
+        <span id="statActive"><span class="stat-dot green"></span>0 active</span>
+        <span id="statToday">Today: 0</span>
+        <span id="statUptime"></span>
+      </div>
     </div>
 
     <div class="shell">
@@ -401,6 +424,24 @@
       tailor: "qcv_tailor",
       jd_text: "qcv_jd_text"
     };
+
+    // --- Stats polling ---
+    async function refreshStats() {
+      try {
+        const r = await fetch("/stats");
+        if (!r.ok) return;
+        const s = await r.json();
+        const activeEl = document.getElementById("statActive");
+        const todayEl = document.getElementById("statToday");
+        const uptimeEl = document.getElementById("statUptime");
+        const dot = s.active_jobs > 0 ? (s.active_jobs >= 3 ? "red" : "amber") : "green";
+        activeEl.innerHTML = `<span class="stat-dot ${dot}"></span>${s.active_jobs} active`;
+        todayEl.textContent = `Today: ${s.today_processed}` + (s.today_failed ? ` (${s.today_failed} failed)` : "");
+        uptimeEl.textContent = `Up: ${s.uptime}`;
+      } catch {}
+    }
+    refreshStats();
+    setInterval(refreshStats, 10000);
 
     const form = document.getElementById("uploadForm");
     const fileInput = document.getElementById("file");
