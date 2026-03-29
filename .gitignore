@@ -1,0 +1,8 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+_cache/
+backup/
+usage_log.jsonl
+.api_key

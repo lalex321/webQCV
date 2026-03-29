@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Q-CV Converter</title>
+  <style>
+    :root{
+      --bg:#e8eef6;
+      --panel:#ffffff;
+      --muted:#64748b;
+      --text:#0f172a;
+      --line:#d8e0ea;
+      --primary:#08142d;
+      --primary-hover:#0d1d40;
+      --soft:#eef2f7;
+      --radius:22px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
+    .page{
+      max-width:800px;
+      margin:18px auto 28px;
+      padding:0 16px;
+    }
+    .topbar{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      color:var(--muted);
+      font-weight:700;
+      font-size:14px;
+      margin-bottom:12px;
+    }
+    .dotwrap{
+      width:20px;height:20px;border-radius:999px;
+      background:#e8edf4;
+      display:flex;align-items:center;justify-content:center;
+      box-shadow:inset 0 1px 2px rgba(255,255,255,.9);
+    }
+    .dot{
+      width:12px;height:8px;border-radius:999px;
+      background:linear-gradient(180deg,#4b5563,#0f172a);
+    }
+    .brand-logo{
+      width:22px;
+      height:22px;
+      object-fit:contain;
+      display:block;
+      flex:0 0 auto;
+    }
+    .topbar .brand-logo{
+      width:22px;
+      height:22px;
+    }
+    .shell{
+      background:rgba(255,255,255,.72);
+      border:1px solid #c6d1df;
+      box-shadow:0 8px 24px rgba(15,23,42,.04);
+      border-radius:28px;
+      overflow:hidden;
+      display:grid;
+      grid-template-columns:1.0fr 1.0fr;
+      min-height:560px;
+      backdrop-filter:blur(8px);
+    }
+    .left,.right{padding:30px 30px}
+    .right{border-left:1px solid #c8d3e0; background:rgba(248,250,252,.76)}
+    .eyebrow{
+      display:inline-flex;
+      align-items:center;
+      border:1px solid var(--line);
+      background:var(--soft);
+      color:#475569;
+      border-radius:999px;
+      padding:7px 12px;
+      font-weight:800;
+      letter-spacing:.03em;
+      font-size:14px;
+      margin-bottom:16px;
+    }
+    h1{
+      margin:0 0 14px;
+      font-size:22px;
+      line-height:.95;
+      letter-spacing:-.05em;
+      max-width:680px;
+    }
+    .lead{
+      font-size:18px;
+      line-height:1.6;
+      color:#64748b;
+      max-width:700px;
+      margin:0 0 16px;
+    }
+    .bullets{
+      margin:18px 0 0;
+      padding:0 0 0 30px;
+      color:#334155;
+      font-size:14px;
+      line-height:1.55;
+    }
+    .bullets li{padding-left:6px}
+    .panel-title{
+      margin:0 0 22px;
+      font-size:15px;
+      letter-spacing:.12em;
+      font-weight:900;
+      color:#475569;
+    }
+    .field{margin-bottom:16px}
+    label{
+      display:block;
+      font-size:14px;
+      font-weight:800;
+      margin-bottom:7px;
+      color:#334155;
+    }
+    input[type="file"], select{
+      display:block;
+      width:100%;
+      padding:11px 14px;
+      border:1px solid #cfd8e3;
+      border-radius:18px;
+      background:#fff;
+      color:#111827;
+      font-size:15px;
+    }
+    input[type="file"]::file-selector-button{
+      font-size:14px;
+      font-weight:700;
+    }
+    .check-card{
+      border:1px solid #d5dde8;
+      border-radius:18px;
+      background:#fff;
+      padding:11px 14px;
+    }
+    .check-card label{
+      margin:0;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-weight:700;
+      font-size:15px;
+    }
+    input[type="checkbox"]{
+      width:16px;height:16px;
+    }
+    .action-row{
+      margin-top:22px;
+    }
+    button{
+      border:0;
+      border-radius:18px;
+      padding:14px 22px;
+      min-width:180px;
+      cursor:pointer;
+      font-size:15px;
+      font-weight:800;
+    }
+    .primary{
+      background:var(--primary);
+      color:#fff;
+      box-shadow:0 10px 24px rgba(8,20,45,.18);
+    }
+    .primary:hover{background:var(--primary-hover)}
+    .primary:disabled{
+      background:#94a3b8;
+      cursor:not-allowed;
+      box-shadow:none;
+    }
+    .secondary{
+      background:#08142d;
+      color:#ffffff;
+      text-decoration:none;
+      display:inline-block;
+      padding:14px 22px;
+      border-radius:18px;
+      font-weight:800;
+      min-width:180px;
+      text-align:center;
+      font-size:15px;
+      border:1px solid #08142d;
+      box-shadow:0 12px 28px rgba(8,20,45,.24);
+    }
+    .status-box{
+      margin-top:22px;
+      padding:16px 18px;
+      border:1px solid var(--line);
+      border-radius:18px;
+      background:rgba(255,255,255,.72);
+      display:none;
+    }
+    .status-line{
+      display:flex;
+      justify-content:space-between;
+      gap:16px;
+      align-items:center;
+      margin-bottom:8px;
+    }
+    .status-title{font-weight:900;font-size:14px}
+    .status-value{color:#334155;font-size:14px}
+    .progress{
+      width:100%;
+      height:8px;
+      background:#dbe2ea;
+      border-radius:999px;
+      overflow:hidden;
+      margin:8px 0 10px;
+    }
+    .bar{
+      width:0%;
+      height:100%;
+      background:#0f172a;
+      transition:width .3s ease;
+    }
+    .hint{font-size:17px;color:#64748b}
+    .error{color:#b91c1c;font-weight:700;margin-top:10px}
+    .hidden{display:none !important}
+    .details-link{
+      margin-left:12px;
+      border:0;
+      background:transparent;
+      color:#0f172a;
+      font-size:14px;
+      font-weight:800;
+      text-decoration:underline;
+      cursor:pointer;
+      padding:0;
+    }
+    .details-link:hover{color:#334155}
+    .modal-backdrop{
+      position:fixed;
+      inset:0;
+      background:rgba(15,23,42,.38);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+      z-index:1000;
+    }
+    .modal-backdrop.open{display:flex}
+    .modal{
+      width:min(760px,100%);
+      max-height:min(80vh,760px);
+      overflow:auto;
+      background:#fff;
+      border:1px solid #d5dde8;
+      border-radius:24px;
+      box-shadow:0 24px 80px rgba(15,23,42,.22);
+      padding:20px 22px 16px;
+    }
+    .modal-head{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:10px;
+    }
+    .modal-title{
+      margin:0;
+      font-size:20px;
+      font-weight:900;
+      letter-spacing:-.03em;
+    }
+    .modal-close{
+      border:1px solid #cfd8e3;
+      background:#fff;
+      color:#0f172a;
+      min-width:auto;
+      padding:8px 12px;
+      border-radius:14px;
+      box-shadow:none;
+    }
+    .details-list{
+      margin:0;
+      padding-left:18px;
+      color:#334155;
+      line-height:1.42;
+      font-size:13px;
+    }
+    .details-list li + li{margin-top:6px}
+    .details-section-title{
+      margin:12px 0 6px;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.04em;
+      text-transform:uppercase;
+      color:#64748b;
+    }
+    .details-divider{
+      height:1px;
+      background:#e2e8f0;
+      margin:10px 0 8px;
+    }
+    @media (max-width: 600px){
+      .shell{grid-template-columns:1fr}
+      .right{border-left:0;border-top:1px solid var(--line)}
+      .left,.right{padding:40px 28px}
+      h1{font-size:22px}
+      .lead{font-size:18px}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <img class="brand-logo" src="/images/Quantori_logo.png" alt="Quantori" />
+      <div>Quantori </div>
+    </div>
+
+    <div class="shell">
+      <div class="left">
+        <div class="eyebrow">Q-CV</div>
+        <h1>Convert CV into the Quantori format.</h1>
+        <p class="lead">
+          Upload a PDF, Word, or image CV, choose a template, optionally anonymize it, and download a ready-to-use Word document.
+        </p>
+        <ul class="bullets">
+          <li>Supports PDF, DOCX, PNG and JPG input</li>
+          <li>Server-side template selection</li>
+          <li>Single-step generation and download</li>
+        </ul>
+      </div>
+
+      <div class="right">
+       
+
+        <form id="uploadForm">
+          <div class="field">
+            <label for="file">Source CV</label>
+            <input id="file" name="file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" required />
+          </div>
+
+          <div class="field">
+            <label for="template">Template</label>
+            <select id="template" name="template"></select>
+          </div>
+
+          <div class="field">
+            <div class="check-card">
+              <label><input id="anonymize" type="checkbox" /> Anonymize</label>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button id="generateBtn" class="primary" type="submit">Convert</button>
+            <a id="topDownloadLink" class="secondary hidden" href="#">Download</a>
+          </div>
+        </form>
+
+        <div id="statusBox" class="status-box">
+          <div class="status-line">
+            <div class="status-title">Processing</div>
+            <div id="statusValue" class="status-value">Queued</div>
+          </div>
+
+          <div class="progress"><div id="progressBar" class="bar"></div></div>
+          <div id="errorText" class="error"></div>
+          <div style="margin-top:14px;">
+            <button id="detailsBtn" class="details-link hidden" type="button">Show details</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="detailsModal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailsTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="detailsTitle" class="modal-title">Processing details</h2>
+        </div>
+        <button id="detailsCloseBtn" class="modal-close" type="button">Close</button>
+      </div>
+      <ul id="detailsList" class="details-list"></ul>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEYS = {
+      anonymize: "qcv_anonymize",
+      template: "qcv_template"
+    };
+
+    const form = document.getElementById("uploadForm");
+    const fileInput = document.getElementById("file");
+    const templateSelect = document.getElementById("template");
+    const anonymizeInput = document.getElementById("anonymize");
+    const generateBtn = document.getElementById("generateBtn");
+    const topDownloadLink = document.getElementById("topDownloadLink");
+
+    const statusBox = document.getElementById("statusBox");
+    const statusValue = document.getElementById("statusValue");
+    const progressBar = document.getElementById("progressBar");
+    const errorText = document.getElementById("errorText");
+    const detailsBtn = document.getElementById("detailsBtn");
+    const detailsModal = document.getElementById("detailsModal");
+    const detailsCloseBtn = document.getElementById("detailsCloseBtn");
+    const detailsList = document.getElementById("detailsList");
+
+    let activeJobId = null;
+    let detailsLines = [];
+    let detailsPayload = null;
+    let pollTimer = null;
+    let pollErrorCount = 0;
+    const POLL_MAX_ERRORS = 5;
+
+    function sourceTypeLabel(file) {
+      if (!file) return "Unknown";
+      const suffix = (file.name.split(".").pop() || "").toLowerCase();
+      if (suffix === "pdf") return "PDF";
+      if (suffix === "docx") return "DOCX";
+      if (["png", "jpg", "jpeg"].includes(suffix)) return "Image";
+      return suffix ? suffix.toUpperCase() : "Unknown";
+    }
+
+    function buildDetailsLines(file) {
+      const isImage = file ? ["png", "jpg", "jpeg"].includes((file.name.split(".").pop() || "").toLowerCase()) : false;
+      return [
+        `Source type: ${sourceTypeLabel(file)}`,
+        `Template: ${templateSelect.value || "Not selected"}`,
+        `Anonymization: ${anonymizeInput.checked ? "On" : "Off"}`,
+        `Reuse enabled: Yes`,
+        `Image input: ${isImage ? "Yes" : "No"}`,
+        `Output: DOCX generated successfully`
+      ];
+    }
+
+    function appendSectionTitle(title) {
+      const heading = document.createElement("div");
+      heading.className = "details-section-title";
+      heading.textContent = title;
+      detailsList.appendChild(heading);
+    }
+
+    function appendDivider() {
+      const divider = document.createElement("div");
+      divider.className = "details-divider";
+      detailsList.appendChild(divider);
+    }
+
+    function appendListItem(line) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      detailsList.appendChild(li);
+    }
+
+    function titleCaseWord(word) {
+      if (!word) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    }
+
+    function prettifySectionName(name) {
+      if (!name) return "";
+      return String(name)
+        .split(/[_\s]+/)
+        .filter(Boolean)
+        .map(titleCaseWord)
+        .join(" ");
+    }
+
+    function buildUserFacingNotes(details) {
+      const notes = [];
+      const cd = details && details.content_details ? details.content_details : null;
+      const rawNotes = cd && Array.isArray(cd.content_notes) ? cd.content_notes.filter(Boolean) : [];
+      if (rawNotes.length) return rawNotes;
+
+      if (cd) {
+        if (cd.current_title_present) notes.push("CV title was taken from the extracted current role.");
+        if (cd.sections_rendered && cd.sections_rendered.includes("summary")) notes.push("Summary was included in the output.");
+        if (cd.sections_rendered && cd.sections_rendered.includes("skills")) notes.push("Technical skills were grouped for display.");
+        if (typeof cd.experience_entries === "number") notes.push(`${cd.experience_entries} work experience entr${cd.experience_entries === 1 ? "y was" : "ies were"} included.`);
+        if (typeof cd.project_entries === "number") notes.push(cd.project_entries > 0 ? `${cd.project_entries} project entr${cd.project_entries === 1 ? "y was" : "ies were"} included.` : "Projects were not included in the output.");
+        if (typeof cd.education_entries === "number") notes.push(cd.education_entries > 0 ? "Education was included in the output." : "Education was not included in the output.");
+        if (typeof cd.certification_entries === "number") notes.push(cd.certification_entries > 0 ? "Certifications were included in the output." : "Certifications were not included in the output.");
+        if (typeof cd.language_entries === "number") notes.push(cd.language_entries > 0 ? "Languages were included in the output." : "Languages were not included in the output.");
+      }
+      return notes;
+    }
+
+    function buildCompactTechnicalLines(details) {
+      const lines = [];
+      if (!details) return lines;
+      if (details.source_type) lines.push(`Source type: ${details.source_type}`);
+      if (details.template) lines.push(`Template: ${details.template}`);
+      if (typeof details.anonymize === "boolean") lines.push(`Anonymization: ${details.anonymize ? "On" : "Off"}`);
+      if (typeof details.reuse_enabled === "boolean") lines.push(`Reuse enabled: ${details.reuse_enabled ? "Yes" : "No"}`);
+      if (typeof details.image_input === "boolean") lines.push(`Image input: ${details.image_input ? "Yes" : "No"}`);
+      if (details.output_generated) lines.push("Output: DOCX generated successfully");
+      return lines;
+    }
+
+    function buildContentSummaryLines(details) {
+      const cd = details && details.content_details ? details.content_details : null;
+      if (!cd) return [];
+      const lines = [];
+      if (Array.isArray(cd.sections_rendered) && cd.sections_rendered.length) {
+        lines.push(`Sections included: ${cd.sections_rendered.map(prettifySectionName).join(", ")}`);
+      }
+      if (Array.isArray(cd.sections_omitted) && cd.sections_omitted.length) {
+        lines.push(`Sections not included: ${cd.sections_omitted.map(prettifySectionName).join(", ")}`);
+      }
+      return lines;
+    }
+
+    function renderDetails() {
+      detailsList.innerHTML = "";
+
+      const effectiveDetails = detailsPayload || {};
+      const notes = buildUserFacingNotes(effectiveDetails);
+      const summaryLines = buildContentSummaryLines(effectiveDetails);
+      const technicalLines = buildCompactTechnicalLines(effectiveDetails);
+      const fallbackLines = !notes.length && !summaryLines.length && !technicalLines.length ? detailsLines : [];
+
+      if (notes.length) {
+        appendSectionTitle("Content notes");
+        for (const line of notes) appendListItem(line);
+      }
+
+      if (summaryLines.length) {
+        if (notes.length) appendDivider();
+        appendSectionTitle("Included content");
+        for (const line of summaryLines) appendListItem(line);
+      }
+
+      if (technicalLines.length) {
+        if (notes.length || summaryLines.length) appendDivider();
+        appendSectionTitle("Technical details");
+        for (const line of technicalLines) appendListItem(line);
+      }
+
+      if (fallbackLines.length) {
+        appendSectionTitle("Technical details");
+        for (const line of fallbackLines) appendListItem(line);
+      }
+    }
+
+    function openDetailsModal() {
+      renderDetails();
+      detailsModal.classList.add("open");
+      detailsModal.setAttribute("aria-hidden", "false");
+      detailsCloseBtn.focus();
+    }
+
+    function closeDetailsModal() {
+      detailsModal.classList.remove("open");
+      detailsModal.setAttribute("aria-hidden", "true");
+    }
+
+    function savePrefs() {
+      localStorage.setItem(STORAGE_KEYS.anonymize, anonymizeInput.checked ? "1" : "0");
+      localStorage.setItem(STORAGE_KEYS.template, templateSelect.value || "");
+    }
+
+    function loadPrefs() {
+      anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
+    }
+
+    async function loadTemplates() {
+      const res = await fetch("/templates");
+      if (!res.ok) throw new Error("Failed to load templates.");
+      const data = await res.json();
+      const templates = Array.isArray(data.templates) ? data.templates : [];
+
+      templateSelect.innerHTML = "";
+      for (const name of templates) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        templateSelect.appendChild(opt);
+      }
+
+      const saved = localStorage.getItem(STORAGE_KEYS.template);
+      if (saved && templates.includes(saved)) {
+        templateSelect.value = saved;
+      } else if (templates.length) {
+        templateSelect.value = templates[0];
+      }
+    }
+
+    function setPrimaryAction(mode, downloadHref = "") {
+      if (mode === "idle") {
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Convert";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+        topDownloadLink.removeAttribute("href");
+        return;
+      }
+
+      if (mode === "running") {
+        generateBtn.disabled = true;
+        generateBtn.textContent = "Converting...";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+        topDownloadLink.removeAttribute("href");
+        return;
+      }
+
+      if (mode === "done") {
+        generateBtn.classList.add("hidden");
+        topDownloadLink.href = downloadHref;
+        topDownloadLink.classList.remove("hidden");
+        return;
+      }
+
+      if (mode === "failed") {
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+        topDownloadLink.removeAttribute("href");
+      }
+    }
+
+    function setStatus(status, progress, error) {
+      const safeStatus = status || "Queued";
+      const safeProgress = Math.max(0, Math.min(Number(progress) || 0, 100));
+
+      statusValue.textContent = safeStatus;
+      progressBar.style.width = `${safeProgress}%`;
+      errorText.textContent = error || "";
+    }
+
+    function resetForNewInput() {
+      activeJobId = null;
+      detailsLines = [];
+      detailsPayload = null;
+      stopPolling();
+      errorText.textContent = "";
+      detailsBtn.classList.add("hidden");
+      closeDetailsModal();
+      setPrimaryAction("idle");
+      setStatus("Queued", 0, "");
+      pollErrorCount = 0;
+    }
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    async function pollJob(jobId) {
+      try {
+        const res = await fetch(`/jobs/${jobId}`);
+        if (!res.ok) throw new Error("Failed to get job status.");
+        const data = await res.json();
+        pollErrorCount = 0;
+
+        setStatus(data.status, data.progress, data.error);
+        detailsPayload = data.details || detailsPayload;
+
+        if (data.ready) {
+          stopPolling();
+          detailsBtn.classList.remove("hidden");
+          setPrimaryAction("done", `/jobs/${jobId}/download`);
+          return;
+        }
+
+        if (data.status === "Failed") {
+          stopPolling();
+          setPrimaryAction("failed");
+        }
+      } catch (err) {
+        pollErrorCount++;
+        if (pollErrorCount >= POLL_MAX_ERRORS) {
+          stopPolling();
+          errorText.textContent = err.message || "Status polling failed.";
+          setPrimaryAction("failed");
+        }
+      }
+    }
+
+    detailsBtn.addEventListener("click", openDetailsModal);
+    detailsCloseBtn.addEventListener("click", closeDetailsModal);
+    detailsModal.addEventListener("click", (e) => {
+      if (e.target === detailsModal) closeDetailsModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && detailsModal.classList.contains("open")) {
+        closeDetailsModal();
+      }
+    });
+
+    anonymizeInput.addEventListener("change", () => {
+      savePrefs();
+      resetForNewInput();
+    });
+    templateSelect.addEventListener("change", () => {
+      savePrefs();
+      resetForNewInput();
+    });
+    fileInput.addEventListener("change", resetForNewInput);
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const file = fileInput.files[0];
+      if (!file) {
+        alert("Please choose a PDF, DOCX, PNG, JPG, or JPEG file.");
+        return;
+      }
+      if (!templateSelect.value) {
+        alert("Please choose a template.");
+        return;
+      }
+
+      savePrefs();
+      stopPolling();
+      activeJobId = null;
+      detailsLines = buildDetailsLines(file);
+      detailsBtn.classList.add("hidden");
+      closeDetailsModal();
+      errorText.textContent = "";
+      statusBox.style.display = "block";
+      setStatus("Uploading", 5, "");
+      setPrimaryAction("running");
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("anonymize", anonymizeInput.checked ? "true" : "false");
+      formData.append("autofix", "false");
+      formData.append("template_name", templateSelect.value);
+
+      try {
+        const res = await fetch("/jobs", { method: "POST", body: formData });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to create job.");
+        }
+        const data = await res.json();
+        activeJobId = data.job_id;
+        detailsPayload = data.details || detailsPayload;
+        setStatus(data.status, data.progress, "");
+        pollTimer = setInterval(() => pollJob(activeJobId), 1500);
+        await pollJob(activeJobId);
+      } catch (err) {
+        errorText.textContent = err.message || "Upload failed.";
+        setPrimaryAction("failed");
+      }
+    });
+
+    (async function init() {
+      loadPrefs();
+      try {
+        await loadTemplates();
+      } catch (err) {
+        errorText.textContent = err.message || "Initialization failed.";
+      }
+      setPrimaryAction("idle");
+      setStatus("Queued", 0, "");
+    })();
+  </script>
+</body>
+</html>

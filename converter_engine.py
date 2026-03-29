@@ -1,0 +1,782 @@
+from __future__ import annotations
+
+import copy
+import inspect
+import json
+import os
+import re
+import tempfile
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Dict, Optional
+
+from google import genai
+from google.genai import types as genai_types
+
+_gemini_api_key: str = ""
+from docx import Document
+from pypdf import PdfReader
+
+import cv_engine as core
+
+StatusCallback = Callable[[str, int], None]
+
+
+@dataclass
+class JobState:
+    job_id: str
+    filename: str
+    status: str = "Queued"
+    progress: int = 0
+    error: Optional[str] = None
+    result_path: Optional[str] = None
+    anonymize: bool = False
+    autofix: bool = False
+    template_name: str = "quantori_classic.docx"
+    debug: str = ""
+    created_at: float = field(default_factory=time.time)
+
+
+class InMemoryJobStore:
+    def __init__(self) -> None:
+        self._jobs: Dict[str, JobState] = {}
+        self._lock = threading.Lock()
+
+    def create(
+        self,
+        filename: str,
+        anonymize: bool = False,
+        autofix: bool = False,
+        template_name: str = "quantori_classic.docx",
+    ) -> JobState:
+        job = JobState(
+            job_id=str(uuid.uuid4()),
+            filename=filename,
+            anonymize=anonymize,
+            autofix=autofix,
+            template_name=template_name,
+        )
+        with self._lock:
+            self._jobs[job.job_id] = job
+        return job
+
+    def get(self, job_id: str) -> Optional[JobState]:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def update(
+        self,
+        job_id: str,
+        *,
+        status: Optional[str] = None,
+        progress: Optional[int] = None,
+        error: Optional[str] = None,
+        result_path: Optional[str] = None,
+        debug: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            if status is not None:
+                job.status = status
+            if progress is not None:
+                job.progress = progress
+            if error is not None:
+                job.error = error
+            if result_path is not None:
+                job.result_path = result_path
+            if debug is not None:
+                job.debug = debug
+
+
+
+def _slug_part(value: str) -> str:
+    text = re.sub(r"[^A-Za-zА-Яа-я0-9_-]+", "_", str(value or "").strip())
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+
+_degree_suffixes_re = re.compile(r',?\s*\b(PhD|Ph\.?D\.?|MD|M\.D\.?|DSc|D\.Sc\.?|Dr\.?)\b\.?', re.IGNORECASE)
+
+def _build_output_base_name(data: dict, anonymize: bool, fallback: str = "Converted") -> str:
+    basics = data.get("basics") or {}
+    raw_name = str((basics.get("name") or data.get("name") or "")).strip()
+    # Strip degree suffixes before building filename
+    raw_name = _degree_suffixes_re.sub('', raw_name).strip()
+    parts = [p for p in re.split(r"\s+", raw_name) if p]
+
+    if len(parts) >= 2:
+        first = _slug_part(parts[0])
+        last = _slug_part(parts[-1])
+        if anonymize:
+            if first and last:
+                return f"CV_{first}_{last[:1]}"
+            if first:
+                return f"CV_{first}"
+        else:
+            if first and last:
+                return f"CV_{first}_{last}"
+            if first:
+                return f"CV_{first}"
+
+    if len(parts) == 1:
+        first = _slug_part(parts[0])
+        if first:
+            return f"CV_{first}"
+
+    fb = _slug_part(fallback) or "Converted"
+    return f"CV_{fb}"
+
+
+def _repair_json(s: str) -> str:
+    """Best-effort repair of common LLM JSON errors."""
+    # Fix trailing commas before } or ]
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    # Fix missing commas between } and { or between "value" and "key"
+    s = re.sub(r'(\})\s*(\{)', r'\1,\2', s)
+    s = re.sub(r'(")\s*\n\s*(")', r'\1,\n\2', s)
+    # Fix unescaped newlines inside strings (common with multiline highlights)
+    # Remove control characters except \n \r \t
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', s)
+    return s
+
+def extract_first_json_object(text: str):
+    if text is None:
+        raise ValueError("No text to parse")
+    s = str(text).strip()
+    if not s:
+        raise ValueError("Empty text")
+
+    fence = re.search(r"```(?:json)?\s*(.*?)```", s, re.S | re.I)
+    if fence:
+        s = fence.group(1).strip()
+
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+
+    starts = [i for i in [s.find("{"), s.find("[")] if i != -1]
+    if not starts:
+        raise ValueError("No JSON object or array found")
+
+    start = min(starts)
+    decoder = json.JSONDecoder()
+    try:
+        obj, _ = decoder.raw_decode(s[start:])
+        return obj
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt repair and retry
+    repaired = _repair_json(s[start:])
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: try raw_decode on repaired text
+    obj, _ = decoder.raw_decode(repaired)
+    return obj
+
+
+def read_source_text(source_path: Path | str) -> str:
+    source_path = Path(source_path)
+    suffix = source_path.suffix.lower()
+
+    if suffix == ".pdf":
+        reader = PdfReader(str(source_path))
+        pages = []
+        for page in reader.pages:
+            pages.append(page.extract_text() or "")
+        return "\n\n".join(pages).strip()
+
+    if suffix == ".docx":
+        try:
+            from source_baseline_extractor import extract_from_docx as _extract_from_docx
+            from cv_engine import _format_docx_sections_for_llm
+            baseline = _extract_from_docx(str(source_path))
+            text = _format_docx_sections_for_llm(baseline)
+            if text:
+                return text
+        except Exception:
+            pass
+        doc = Document(str(source_path))
+        parts = []
+        for p in doc.paragraphs:
+            txt = (p.text or "").strip()
+            if txt:
+                parts.append(txt)
+        return "\n".join(parts).strip()
+
+    raise ValueError(f"Unsupported source file: {source_path.name}")
+
+
+def _is_supported_image_file(source_path: Path | str) -> bool:
+    source_path = Path(source_path)
+    return source_path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+
+
+def _mime_type_for_source(source_path: Path | str) -> str:
+    source_path = Path(source_path)
+    suffix = source_path.suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    raise ValueError(f"Unsupported image file: {source_path.name}")
+
+
+def call_llm_json_for_uploaded_file(prompt: str, model_name: str, source_path: Path | str):
+    source_path = Path(source_path)
+    client = genai.Client(api_key=_gemini_api_key)
+    mime_type = _mime_type_for_source(source_path)
+    uploaded = client.files.upload(
+        file=str(source_path),
+        config=genai_types.UploadFileConfig(mime_type=mime_type),
+    )
+
+    while getattr(uploaded, "state", None) and getattr(uploaded.state, "name", "") == "PROCESSING":
+        time.sleep(1)
+        uploaded = client.files.get(name=uploaded.name)
+
+    state_name = getattr(getattr(uploaded, "state", None), "name", "")
+    if state_name and state_name != "ACTIVE":
+        raise RuntimeError(f"Uploaded file is not ready: {state_name}")
+
+    response = client.models.generate_content(model=model_name, contents=[uploaded, prompt])
+    txt = getattr(response, "text", None)
+    if not txt:
+        raise RuntimeError("Model returned empty response")
+    return extract_first_json_object(txt)
+
+
+
+
+def _as_clean_list(value):
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if isinstance(item, str):
+                s = item.strip()
+                if s:
+                    out.append(s)
+            elif isinstance(item, dict):
+                out.append(item)
+        return out
+    return []
+
+
+def _count_summary_bullets(data: dict) -> int:
+    summary = data.get("summary") or {}
+    if not isinstance(summary, dict):
+        return 0
+    bullets = summary.get("bullet_points") or summary.get("items") or []
+    if not isinstance(bullets, list):
+        return 0
+    return len([x for x in bullets if isinstance(x, str) and x.strip()])
+
+
+def _count_skill_groups(data: dict) -> int:
+    skills = data.get("skills") or {}
+    if not isinstance(skills, dict):
+        return 0
+    count = 0
+    for value in skills.values():
+        if isinstance(value, list) and any(str(x).strip() for x in value if x is not None):
+            count += 1
+        elif isinstance(value, str) and value.strip():
+            count += 1
+    return count
+
+
+def _is_nonempty_education_entry(entry) -> bool:
+    if not isinstance(entry, dict):
+        return bool(str(entry).strip())
+    for key in ("degree", "institution", "school", "field", "dates", "year"):
+        if str(entry.get(key) or "").strip():
+            return True
+    return False
+
+
+def _build_content_details(data: dict, *, template_name: str, anonymize: bool, source_path: Path) -> dict:
+    basics = data.get("basics") or {}
+    summary_count = _count_summary_bullets(data)
+    skill_group_count = _count_skill_groups(data)
+    experience_entries = len([x for x in _as_clean_list(data.get("experience")) if isinstance(x, dict) or str(x).strip()])
+    project_entries = len([x for x in _as_clean_list(data.get("projects")) if isinstance(x, dict) or str(x).strip()])
+    education_entries = len([x for x in _as_clean_list(data.get("education")) if _is_nonempty_education_entry(x)])
+    certification_entries = len([x for x in _as_clean_list(data.get("certifications")) if isinstance(x, str) and x.strip()])
+    language_entries = len([x for x in _as_clean_list(data.get("languages")) if isinstance(x, dict) or str(x).strip()])
+
+    other_sections = []
+    for sec in _as_clean_list(data.get("other_sections")):
+        if not isinstance(sec, dict):
+            continue
+        title = str(sec.get("title") or "").strip()
+        items = sec.get("items") or []
+        has_items = isinstance(items, list) and any(str(x).strip() for x in items if x is not None)
+        if title and has_items:
+            other_sections.append(title)
+
+    rendered = []
+    omitted = []
+
+    def add_section(name: str, present: bool) -> None:
+        (rendered if present else omitted).append(name)
+
+    add_section("summary", summary_count > 0)
+    add_section("skills", skill_group_count > 0)
+    add_section("experience", experience_entries > 0)
+    add_section("projects", project_entries > 0)
+    add_section("education", education_entries > 0)
+    add_section("certifications", certification_entries > 0)
+    add_section("languages", language_entries > 0)
+    if other_sections:
+        rendered.extend([f"other_sections:{title}" for title in other_sections])
+
+    notes = []
+    current_title = str((basics.get("current_title") or "")).strip()
+    if current_title:
+        notes.append(f"CV title was set from the extracted current role: '{current_title}'.")
+    if summary_count:
+        notes.append(f"Summary was included as {summary_count} concise bullet point{'s' if summary_count != 1 else ''}.")
+    if skill_group_count:
+        notes.append(f"Technical skills were grouped into {skill_group_count} section{'s' if skill_group_count != 1 else ''} for display.")
+    if experience_entries:
+        notes.append(f"Work experience was included with {experience_entries} role{'s' if experience_entries != 1 else ''}.")
+    else:
+        notes.append("Work experience was not included in the output.")
+    if project_entries:
+        notes.append(f"Projects section includes {project_entries} entr{'ies' if project_entries != 1 else 'y'}.")
+    if certification_entries:
+        notes.append(f"Certifications were included ({certification_entries}).")
+    if language_entries:
+        notes.append(f"Languages were included ({language_entries}).")
+    if education_entries:
+        notes.append("Education was included in the output.")
+    else:
+        notes.append("Education was not included in the output.")
+    if other_sections:
+        notes.append("Additional sections included: " + ", ".join(other_sections) + ".")
+    if anonymize:
+        notes.append("Personal contact details were removed or generalized for anonymized output.")
+
+    return {
+        "current_title_present": bool(current_title),
+        "summary_bullet_count": summary_count,
+        "skill_group_count": skill_group_count,
+        "experience_entries": experience_entries,
+        "project_entries": project_entries,
+        "education_entries": education_entries,
+        "certification_entries": certification_entries,
+        "language_entries": language_entries,
+        "sections_rendered": rendered,
+        "sections_omitted": omitted,
+        "other_section_titles": other_sections,
+        "content_notes": notes,
+        "template_name": template_name,
+        "source_suffix": source_path.suffix.lower(),
+    }
+
+def _translate_non_english(data: dict) -> None:
+    """Translate non-English content via LLM (no-op if all English)."""
+    if not _gemini_api_key or not isinstance(data, dict):
+        return
+    # Full translation pass if significant non-English content detected
+    try:
+        if hasattr(core, "translate_full_json_via_llm"):
+            result = core.translate_full_json_via_llm(data, _gemini_api_key)
+            if result:
+                core.sanitize_json(data)
+    except Exception:
+        pass
+    # Translate remaining non-English dates and locations
+    try:
+        if hasattr(core, "translate_dates_via_llm"):
+            core.translate_dates_via_llm(data, _gemini_api_key)
+    except Exception:
+        pass
+    try:
+        if hasattr(core, "translate_locations_via_llm"):
+            core.translate_locations_via_llm(data, _gemini_api_key)
+    except Exception:
+        pass
+    # Final sweep: translate any remaining non-English strings
+    try:
+        if hasattr(core, "translate_remaining_strings_via_llm"):
+            core.translate_remaining_strings_via_llm(data, _gemini_api_key)
+    except Exception:
+        pass
+
+
+def configure_gemini(api_key: str) -> None:
+    global _gemini_api_key
+    if not api_key:
+        raise RuntimeError(
+            "Gemini API key is not configured. "
+            "Set the GEMINI_API_KEY environment variable or visit /setup to enter the key."
+        )
+    _gemini_api_key = api_key
+
+
+def resolve_api_key(app_dir: Path, config: dict) -> str:
+    """Resolve API key in priority order:
+    1. GEMINI_API_KEY environment variable
+    2. <app_dir>/.api_key file (set via /setup page)
+    3. ~/.quantoricv_settings.json (shared with desktop app)
+    """
+    env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    local_key_file = app_dir / ".api_key"
+    if local_key_file.exists():
+        local_key = local_key_file.read_text(encoding="utf-8").strip()
+        if local_key:
+            return local_key
+    return config.get("gemini_api_key") or config.get("api_key") or ""
+
+
+def choose_model_name(config: dict) -> str:
+    raw = config.get("gemini_model") or config.get("model_name") or "gemini-2.5-flash"
+    raw = str(raw).strip()
+    if raw.startswith("models/"):
+        raw = raw.split("/", 1)[1]
+    if raw == "gemini-1.5-flash":
+        raw = "gemini-2.5-flash"
+    return raw
+
+
+def call_llm_json(prompt: str, model_name: str):
+    client = genai.Client(api_key=_gemini_api_key)
+    response = client.models.generate_content(model=model_name, contents=prompt)
+    txt = getattr(response, "text", None)
+    if not txt:
+        raise RuntimeError("Model returned empty response")
+    return extract_first_json_object(txt)
+
+
+def make_temp_workspace() -> Path:
+    return Path(tempfile.mkdtemp(prefix="qcv_web_"))
+
+
+def _safe_source_key_fragment(source_key: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(source_key or "")).strip("_") or "source"
+
+
+class QCVWebEngine:
+    def __init__(self, templates_dir: str | Path) -> None:
+        self.templates_dir = Path(templates_dir)
+        self.app_dir = self.templates_dir.parent
+        self.cache_dir = self.app_dir / "_cache"
+        self.config = core.load_config()
+        self.model_name = choose_model_name(self.config)
+        self.last_content_details = None
+
+    def _status(self, cb: Optional[StatusCallback], name: str, pct: int) -> None:
+        if cb:
+            cb(name, pct)
+
+    def _debug(self, cb: Optional[Callable[[str], None]], text: str) -> None:
+        if cb:
+            cb(text)
+
+    def _parse_cv_to_json(self, source_text: str) -> dict:
+        master_prompt = self.config["prompt_master_inst"]
+        schema = getattr(core, "CV_JSON_SCHEMA", "{}")
+        full_prompt = (
+            f"{master_prompt}\n\n"
+            f"JSON SCHEMA:\n{schema}\n\n"
+            f"SOURCE CV TEXT:\n{source_text}"
+        )
+        data = call_llm_json(full_prompt, self.model_name)
+        if hasattr(core, "sanitize_json"):
+            data = core.sanitize_json(data)
+        _translate_non_english(data)
+        return data
+
+    def _parse_cv_file_to_json(self, source_path: Path | str) -> dict:
+        source_path = Path(source_path)
+        if _is_supported_image_file(source_path):
+            master_prompt = self.config["prompt_master_inst"]
+            schema = getattr(core, "CV_JSON_SCHEMA", "{}")
+            full_prompt = (
+                f"{master_prompt}\n\n"
+                f"JSON SCHEMA:\n{schema}"
+            )
+            data = call_llm_json_for_uploaded_file(full_prompt, self.model_name, source_path)
+            if hasattr(core, "sanitize_json"):
+                data = core.sanitize_json(data)
+            _translate_non_english(data)
+            return data
+
+        source_text = read_source_text(source_path)
+        return self._parse_cv_to_json(source_text)
+
+    def _run_light_check(self, data: dict) -> dict:
+        if hasattr(core, "sanitize_json"):
+            data = core.sanitize_json(data)
+        return data
+
+    def _apply_autofix(self, data: dict) -> dict:
+        prompt_autofix = self.config.get("prompt_autofix")
+        if not prompt_autofix:
+            return data
+
+        qa_report_text = json.dumps(
+            {
+                "score": 95,
+                "missing": ["AutoFix web mode: please repair obvious extraction issues if present"],
+                "hallucinations": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        prompt = (
+            prompt_autofix
+            .replace("{current_json_str}", json.dumps(data, ensure_ascii=False, indent=2))
+            .replace("{qa_report_text}", qa_report_text)
+        )
+
+        fixed = call_llm_json(prompt, self.model_name)
+        if hasattr(core, "sanitize_json"):
+            fixed = core.sanitize_json(fixed)
+        return fixed
+
+    def _apply_anonymization(self, data: dict) -> dict:
+        if hasattr(core, "smart_anonymize_data"):
+            api_key = self.config.get("gemini_api_key") or self.config.get("api_key") or ""
+            out, _in_tok, _out_tok, _cost = core.smart_anonymize_data(copy.deepcopy(data), api_key, self.config)
+            if not isinstance(out, dict):
+                out = copy.deepcopy(data)
+        else:
+            out = copy.deepcopy(data)
+
+        basics = out.get("basics", {}) or {}
+        contacts = basics.get("contacts", {}) or {}
+
+        name = str(basics.get("name") or "").strip()
+        if name:
+            # Preserve academic degrees, strip from name parts for anonymization
+            _deg_patterns = {'phd', 'ph.d.', 'ph.d', 'md', 'm.d.', 'dsc', 'd.sc.', 'dr.'}
+            parts = [p for p in re.split(r"\s+", name) if p.strip()]
+            degrees = [p for p in parts if p.lower().rstrip('.,') in _deg_patterns]
+            name_parts = [p for p in parts if p.lower().rstrip('.,') not in _deg_patterns]
+            # Also strip commas from last name part (e.g. "Chebanov," before "PhD")
+            name_parts = [p.rstrip(',') for p in name_parts]
+            name_parts = [p for p in name_parts if p]
+            if len(name_parts) >= 2:
+                anon = f"{name_parts[0]} {name_parts[1][0]}."
+            elif len(name_parts) == 1:
+                anon = name_parts[0]
+            else:
+                anon = "Candidate"
+            # Check education for degree if not in name
+            if not degrees:
+                for edu in out.get('education', []):
+                    deg = str(edu.get('degree', '')).lower()
+                    if any(d in deg for d in ['phd', 'ph.d', 'doctorate']):
+                        degrees.append('PhD'); break
+                    elif deg.startswith('md') or 'm.d.' in deg:
+                        degrees.append('MD'); break
+            if degrees:
+                seen = set()
+                unique = [d for d in degrees if d.lower().rstrip('.,') not in seen and not seen.add(d.lower().rstrip('.,'))]
+                anon = f"{anon}, {' '.join(unique)}"
+            basics["name"] = anon
+
+        contacts["email"] = ""
+        contacts["phone"] = ""
+        basics["links"] = []
+        basics["contacts"] = contacts
+        basics["location"] = ""
+        out["location"] = ""
+        out["contact_line"] = ""
+
+        if hasattr(core, "_generalize_companies_in_data"):
+            try:
+                core._generalize_companies_in_data(out)
+            except Exception:
+                pass
+
+        out["basics"] = basics
+
+        # Anonymize publications: replace list with summary count
+        # (skip if already anonymized by smart_anonymize_data)
+        for sec in out.get('other_sections', []):
+            if not isinstance(sec, dict):
+                continue
+            title_lower = str(sec.get('title', '')).strip().lower()
+            if any(kw in title_lower for kw in ('publication', 'paper', 'conference proceeding')):
+                items = sec.get('items', [])
+                if items and not (len(items) == 1 and str(items[0]).startswith("Author and co-author")):
+                    pub_count = len(items)
+                    if pub_count > 0:
+                        sec['items'] = [f"Author and co-author of {pub_count} publications in peer-reviewed scientific journals and conference proceedings."]
+
+        return out
+
+    def _generate_docx(
+        self,
+        data: dict,
+        output_dir: Path,
+        base_name: str,
+        template_name: str,
+        anonymize: bool = False,
+        debug_cb: Optional[Callable[[str], None]] = None,
+    ) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        final_base_name = _build_output_base_name(data, anonymize, fallback=base_name)
+        result_path = output_dir / f"{final_base_name}.docx"
+
+        if not hasattr(core, "generate_docx_from_json"):
+            raise RuntimeError("cv_engine_03_48.generate_docx_from_json() not found")
+
+        template_path = self.templates_dir / template_name
+        if not template_path.exists():
+            raise RuntimeError(f"Template not found: {template_name}")
+
+        fn = core.generate_docx_from_json
+
+        cfg = dict(self.config)
+        cfg["active_template"] = template_name
+        cfg["template_path"] = str(template_path)
+        if not data.get("contact_line"):
+            cfg["suppress_contact_line"] = True
+
+        workspace_templates = None
+        if cfg.get("workspace_dir"):
+            workspace_templates = Path(cfg.get("workspace_dir")) / "templates"
+
+        debug_lines = [
+            f"template_name={template_name}",
+            f"server_template_path={template_path.resolve()}",
+            f"server_template_exists={template_path.exists()}",
+            f"cfg.active_template={cfg.get('active_template')}",
+        ]
+        if workspace_templates is not None:
+            wp = workspace_templates / template_name
+            debug_lines.append(f"workspace_template_path={wp.resolve()}")
+            debug_lines.append(f"workspace_template_exists={wp.exists()}")
+
+        self._debug(debug_cb, "\n".join(debug_lines))
+
+        try:
+            sig = inspect.signature(fn)
+            argc = len(sig.parameters)
+            try:
+                if argc == 2:
+                    maybe = fn(data, str(result_path))
+                elif argc == 3:
+                    maybe = fn(data, str(result_path), cfg)
+                else:
+                    maybe = fn(data, str(result_path), cfg)
+            except TypeError:
+                maybe = fn(data, result_path, cfg)
+        except Exception as e:
+            raise RuntimeError(f"DOCX generation failed: {e}") from e
+
+        if isinstance(maybe, (str, Path)) and Path(maybe).exists():
+            return Path(maybe)
+        if result_path.exists():
+            return result_path
+        raise RuntimeError("DOCX generation did not produce an output file")
+
+    def _base_json_artifacts_dir(self) -> Path:
+        return self.cache_dir / "base_json"
+
+    def _base_json_path(self, source_key: str) -> Path:
+        safe_key = _safe_source_key_fragment(source_key)
+        return self._base_json_artifacts_dir() / f"{safe_key}.base.json"
+
+    def _save_base_json_artifact(self, source_key: str | None, data: dict) -> None:
+        if not source_key:
+            return
+        artifacts_dir = self._base_json_artifacts_dir()
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        base_json_path = self._base_json_path(source_key)
+        base_json_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _load_base_json_artifact(self, source_key: str | None) -> dict | None:
+        if not source_key:
+            return None
+        base_json_path = self._base_json_path(source_key)
+        if not base_json_path.exists():
+            return None
+        try:
+            data = json.loads(base_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    def process(
+        self,
+        source_path: Path,
+        output_dir: Path,
+        *,
+        anonymize: bool = False,
+        autofix: bool = False,
+        template_name: str,
+        source_key: str | None = None,
+        status_cb: Optional[StatusCallback] = None,
+        debug_cb: Optional[Callable[[str], None]] = None,
+    ) -> Path:
+        source_path = Path(source_path)
+        self.last_content_details = None
+        self.config = core.load_config()
+        self.model_name = choose_model_name(self.config)
+        api_key = resolve_api_key(self.app_dir, self.config)
+        configure_gemini(api_key)
+
+        self._status(status_cb, "Uploading", 5)
+
+        data = self._load_base_json_artifact(source_key)
+        if data is not None:
+            self._status(status_cb, "Parsing (reused base JSON)", 20)
+            self._debug(
+                debug_cb,
+                "parse_mode=reused_base_json\n"
+                "base_json_reuse=hit\n"
+                f"source_key={source_key}",
+            )
+        else:
+            self._status(status_cb, "Parsing (fresh)", 20)
+            data = self._parse_cv_file_to_json(source_path)
+
+            self._status(status_cb, "Checking", 45)
+            data = self._run_light_check(data)
+            self._save_base_json_artifact(source_key, data)
+            self._debug(
+                debug_cb,
+                "parse_mode=fresh_parse\n"
+                f"base_json_reuse=miss\nsource_key={source_key}",
+            )
+
+        if autofix:
+            self._status(status_cb, "AutoFix", 60)
+            data = self._apply_autofix(data)
+
+        if anonymize:
+            self._status(status_cb, "Anonymizing", 75)
+            data = self._apply_anonymization(data)
+
+        self.last_content_details = _build_content_details(
+            data,
+            template_name=template_name,
+            anonymize=anonymize,
+            source_path=source_path,
+        )
+
+        self._status(status_cb, "Generating DOCX", 90)
+        result_path = self._generate_docx(data, output_dir, source_path.stem, template_name, anonymize=anonymize, debug_cb=debug_cb)
+
+        self._status(status_cb, "Done", 100)
+        return result_path
