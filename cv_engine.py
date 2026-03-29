@@ -2305,14 +2305,54 @@ def smart_anonymize_data(data, api_key, cfg):
             except Exception:
                 mapping = {name: "Confidential Company" for name in unique_comps}
 
+            # Also collect client/project names mentioned in brackets in project descriptions
+            bracket_names = set()
+            for job in experiences:
+                pd = str(job.get('project_description', ''))
+                for hl in (job.get('highlights') or []):
+                    pd += ' ' + str(hl)
+                # Match [Name] or [Name (details)]
+                for m in re.findall(r'\[([^\]]+)\]', pd):
+                    name = m.strip()
+                    if name and len(name) > 2 and name not in mapping:
+                        bracket_names.add(name)
+            # Add bracket names to mapping as "Confidential Client"
+            for bn in bracket_names:
+                if bn not in mapping:
+                    mapping[bn] = "Confidential Client"
+
+            # Replace company names in company_name field
             for job in experiences:
                 original = job.get('company_name')
                 if original and original in mapping: job['company_name'] = mapping[original]
                 elif original: job['company_name'] = "Confidential Company"
-                
+
             for vol in volunteering:
                 original = vol.get('organization')
                 if original and original in mapping: vol['organization'] = mapping[original]
                 elif original: vol['organization'] = "Confidential Organization"
-            
+
+            # Also scrub company names from text fields (project_description, highlights, environment)
+            def _scrub_text(text, name_mapping):
+                if not isinstance(text, str):
+                    return text
+                for orig, repl in name_mapping.items():
+                    if orig and orig in text:
+                        text = text.replace(orig, repl)
+                return text
+
+            def _scrub_deep(obj, name_mapping):
+                if isinstance(obj, str):
+                    return _scrub_text(obj, name_mapping)
+                if isinstance(obj, list):
+                    return [_scrub_deep(item, name_mapping) for item in obj]
+                if isinstance(obj, dict):
+                    return {k: _scrub_deep(v, name_mapping) for k, v in obj.items()}
+                return obj
+
+            for job in experiences:
+                for field in ('project_description', 'highlights', 'environment'):
+                    if field in job:
+                        job[field] = _scrub_deep(job[field], mapping)
+
     return blind, in_tok, out_tok, cost
