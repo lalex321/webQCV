@@ -18,6 +18,28 @@ class LowRelevanceError(Exception):
     """Raised when CV is not relevant to the provided JD."""
     pass
 
+_JD_MARKERS = {'experience', 'requirements', 'responsibilities', 'qualifications', 'role',
+               'skills', 'position', 'candidate', 'looking for', 'must have', 'nice to have',
+               'employment', 'salary', 'location', 'remote', 'hybrid', 'full-time', 'part-time',
+               'about the role', 'job description', 'what you', 'who you', 'we are looking',
+               'you will', 'you should', 'your role', 'the team', 'reporting to', 'hiring'}
+
+def validate_jd(jd_text: str) -> str | None:
+    """Validate JD text. Returns error message or None if valid."""
+    if not jd_text or not jd_text.strip():
+        return "Job Description is empty."
+    text = jd_text.strip()
+    if len(text) < 50:
+        return f"Job Description is too short ({len(text)} chars). Please provide a full JD."
+    words = text.split()
+    if len(words) < 15:
+        return f"Job Description has only {len(words)} words. Please provide a more detailed JD."
+    text_lower = text.lower()
+    hits = sum(1 for m in _JD_MARKERS if m in text_lower)
+    if hits < 2:
+        return "This doesn't look like a Job Description. Please paste an actual JD with role requirements."
+    return None
+
 from google import genai
 from google.genai import types as genai_types
 
@@ -811,6 +833,11 @@ class QCVWebEngine:
         self.model_name = choose_model_name(self.config)
         api_key = resolve_api_key(self.app_dir, self.config)
         configure_gemini(api_key)
+
+        if tailor and jd_text.strip():
+            jd_err = validate_jd(jd_text)
+            if jd_err:
+                raise ValueError(jd_err)
 
         self._status(status_cb, "Uploading", 5)
 
