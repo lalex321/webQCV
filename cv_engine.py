@@ -1280,6 +1280,25 @@ def sanitize_json(data):
     if clean_title:
             # Strip common prefixes that LLM sometimes prepends
             clean_title = re.sub(r'^(Objective|Summary|Profile|About)\s*:\s*', '', clean_title, flags=re.IGNORECASE).strip()
+            # Extract and rescue tech terms from parenthesised content before stripping
+            _paren_match = re.search(r'\((.+)', clean_title)
+            if _paren_match:
+                _paren_text = re.sub(r'[()]+', ',', _paren_match.group(1))
+                _paren_text = re.sub(r'\b\d+x\s+', '', _paren_text)
+                _paren_text = re.sub(r'\b(expert|certified|specialist|proficient|experienced)\b', '', _paren_text, flags=re.IGNORECASE)
+                _paren_text = re.sub(r',?\s*[BM]\.\s?[SA]\.?\s+(in\s+\w+)+.*$', '', _paren_text, flags=re.IGNORECASE)
+                _title_techs = [t.strip() for t in re.split(r'[,&]+', _paren_text) if t.strip() and len(t.strip()) >= 2]
+                if _title_techs:
+                    skills = data.setdefault('skills', {})
+                    existing = set()
+                    for cat_items in skills.values():
+                        if isinstance(cat_items, list):
+                            existing.update(s.lower().strip() for s in cat_items)
+                    new_techs = [t for t in _title_techs if t.lower().strip() not in existing]
+                    if new_techs:
+                        title_cat = skills.get('Title Specialties', [])
+                        title_cat.extend(new_techs)
+                        skills['Title Specialties'] = title_cat
             # Remove parenthesised tech lists / credential noise before splitting
             clean_title = re.sub(r'\s*\(.*', '', clean_title).strip()
             # Remove trailing degree/credential fragments like "M.S in ComputerScience"
