@@ -324,7 +324,33 @@ def _build_processing_details(
     return details
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
+def _pre_screen_relevance(data: dict, jd_text: str) -> str:
+    """Quick LLM check: returns HIGH, MEDIUM, or LOW."""
+    try:
+        name = data.get("basics", {}).get("name", "Unknown")
+        title = data.get("basics", {}).get("current_title", "")
+        skills = data.get("skills", {})
+        skills_flat = ", ".join(s for cat in skills.values() if isinstance(cat, list) for s in cat[:10])
+        prompt = (
+            f"Does this candidate have ANY transferable skills or experience relevant to the job description? "
+            f"Be lenient — if there is even partial overlap in technologies, domain, or role type, answer HIGH or MEDIUM. "
+            f"Only answer LOW if the candidate's background is completely unrelated (e.g. a farmer applying for a software role). "
+            f"Reply with ONLY one word: HIGH, MEDIUM, or LOW.\n\n"
+            f"Candidate: {name}, {title}\nSkills: {skills_flat[:500]}\n\n"
+            f"Job Description (first 1000 chars):\n{jd_text[:1000]}"
+        )
+        client = _core._make_genai_client(_core.load_config().get("api_key", "") or os.environ.get("GEMINI_API_KEY", ""))
+        resp = _core._retry_generate(client, _core.MODEL_NAME, prompt)
+        result = (resp.text or "").strip().upper()
+        for word in result.split():
+            if word in ("HIGH", "MEDIUM", "LOW"):
+                return word
+    except Exception:
+        pass
+    return "MEDIUM"
+
+
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float) -> None:
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -333,6 +359,24 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             jobs.update(job_id, debug=text)
 
         job_engine = QCVWebEngine(TEMPLATES_DIR)
+
+        # Pre-screen relevance if tailoring (unless forced)
+        if tailor and jd_text.strip() and not force_tailor:
+            cb("Pre-screening relevance", 10)
+            # Quick extraction for screening (use cached if available)
+            screen_data = job_engine._parse_cv_file_to_json(source_path)
+            relevance = _pre_screen_relevance(screen_data, jd_text)
+            if relevance == "LOW":
+                jobs.update(job_id, status="Low Relevance", progress=100,
+                           error="This CV does not appear relevant to the provided Job Description.")
+                append_usage({
+                    "event": "skipped_low_relevance",
+                    "job_id": job_id, "ip": client_ip,
+                    "file": source_path.name, "tailor": True,
+                    "duration_sec": round(time.time() - started_at, 2),
+                })
+                return
+
         result_path = job_engine.process(
             source_path=source_path,
             output_dir=workdir,
@@ -396,6 +440,7 @@ async def create_job(
     tailor: bool = Form(False),
     jd_text: str = Form(""),
     template_name: str = Form(...),
+    force_tailor: bool = Form(False),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg"}:
@@ -456,7 +501,7 @@ async def create_job(
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job.job_id, source_path, workdir, anonymize, autofix, tailor, jd_text, template_name, source_key, client_ip, started_at),
+        args=(job.job_id, source_path, workdir, anonymize, autofix, tailor, jd_text, force_tailor, template_name, source_key, client_ip, started_at),
         daemon=True,
     )
     thread.start()
