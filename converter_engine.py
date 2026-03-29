@@ -651,21 +651,29 @@ class QCVWebEngine:
                 'all', 'any', 'each', 'our', 'you', 'your', 'their', 'them', 'who', 'what',
                 'when', 'how', 'more', 'most', 'some', 'than', 'into', 'over', 'about',
                 'experience', 'years', 'role', 'work', 'working', 'strong', 'ability',
-                'team', 'teams', 'including', 'across', 'within', 'using', 'based'}
+                'team', 'teams', 'including', 'across', 'within', 'using', 'based',
+                # Generic titles/qualifiers that match too broadly
+                'senior', 'junior', 'lead', 'manager', 'head', 'director', 'staff',
+                'full', 'high', 'time', 'level', 'new', 'key', 'well', 'good', 'best',
+                'systems', 'system', 'management', 'client', 'clients', 'project',
+                'projects', 'delivery', 'process', 'service', 'services', 'support',
+                'requirements', 'quality', 'development', 'performance', 'business',
+                'communication', 'skills', 'knowledge', 'solutions', 'environment'}
         jd_words -= stop
         cv_terms -= stop
 
         overlap = jd_words & cv_terms
-        # Calculate overlap ratio relative to JD keywords
-        if not jd_words:
+        if not jd_words or not cv_terms:
             return "MEDIUM"
-        ratio = len(overlap) / len(jd_words)
-        print(f"[Relevance] JD words: {len(jd_words)}, CV terms: {len(cv_terms)}, "
-              f"overlap: {len(overlap)} ({ratio*100:.1f}%) => {overlap}")
+        jd_ratio = len(overlap) / len(jd_words)
+        cv_ratio = len(overlap) / len(cv_terms)
+        ratio = max(jd_ratio, cv_ratio)
+        print(f"[Relevance] JD: {len(jd_words)}, CV: {len(cv_terms)}, "
+              f"overlap: {len(overlap)} (jd={jd_ratio*100:.1f}% cv={cv_ratio*100:.1f}% => max {ratio*100:.1f}%) {overlap}")
 
-        if ratio >= 0.20:
+        if ratio >= 0.15:
             return "HIGH"
-        elif ratio >= 0.10:
+        elif ratio >= 0.05:
             return "MEDIUM"
         else:
             return "LOW"
@@ -836,8 +844,8 @@ class QCVWebEngine:
             if not force_tailor:
                 self._status(status_cb, "Checking relevance", 65)
                 relevance = self._check_relevance(data, jd_text)
-                if relevance in ("LOW", "MEDIUM"):
-                    raise LowRelevanceError(f"Relevance: {relevance}. This CV does not appear relevant to the provided Job Description.")
+                if relevance == "LOW":
+                    raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
             self._status(status_cb, "Tailoring to JD", 70)
             data = self._apply_tailor(data, jd_text)
 
