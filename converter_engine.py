@@ -940,6 +940,7 @@ class QCVWebEngine:
         gap_ready_cb: Optional[Callable[[dict], None]] = None,
         focus_skills_cb: Optional[Callable[[], list]] = None,
         candidate_notes_cb: Optional[Callable[[], dict]] = None,
+        preloaded_data: dict | None = None,
     ) -> Path:
         source_path = Path(source_path)
         self.last_content_details = None
@@ -955,8 +956,11 @@ class QCVWebEngine:
 
         self._status(status_cb, "Uploading", 5)
 
-        data = self._load_base_json_artifact(source_key)
-        if data is not None:
+        if preloaded_data is not None:
+            data = preloaded_data
+            self._status(status_cb, "Loaded from JSON", 35)
+            self._debug(debug_cb, "parse_mode=preloaded_json\nbase_json_reuse=preloaded")
+        elif (data := self._load_base_json_artifact(source_key)) is not None:
             self._status(status_cb, "Parsing (reused base JSON)", 20)
             self._debug(
                 debug_cb,
@@ -976,6 +980,8 @@ class QCVWebEngine:
                 "parse_mode=fresh_parse\n"
                 f"base_json_reuse=miss\nsource_key={source_key}",
             )
+        # Store base CV JSON for download
+        self._last_base_json = copy.deepcopy(data)
 
         if autofix:
             self._status(status_cb, "AutoFix", 60)

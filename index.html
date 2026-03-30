@@ -454,7 +454,7 @@
         <form id="uploadForm">
           <div class="field">
             <label for="file">Source CV</label>
-            <input id="file" name="file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" required />
+            <input id="file" name="file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg,.json" required />
           </div>
 
           <div class="field">
@@ -472,10 +472,6 @@
             <div class="check-card">
               <label><input id="tailor" type="checkbox" /> Tailor to JD</label>
             </div>
-          </div>
-          <div id="fitJsonField" class="field hidden">
-            <label for="fitJsonFile">Fit Report JSON (optional)</label>
-            <input id="fitJsonFile" type="file" accept=".json" />
           </div>
           <div class="action-row">
             <button id="generateBtn" class="primary" type="submit">Convert</button>
@@ -583,8 +579,6 @@
     const tailorInput = document.getElementById("tailor");
     const jdField = document.getElementById("jdField");
     const jdText = document.getElementById("jdText");
-    const fitJsonField = document.getElementById("fitJsonField");
-    const fitJsonFile = document.getElementById("fitJsonFile");
     const gapDownloadBtn = document.getElementById("gapDownloadBtn");
     const generateBtn = document.getElementById("generateBtn");
     const topDownloadLink = document.getElementById("topDownloadLink");
@@ -798,7 +792,6 @@
       anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
       tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
       jdField.classList.toggle("hidden", !tailorInput.checked);
-      fitJsonField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       jdText.value = localStorage.getItem(STORAGE_KEYS.jd_text) || "";
     }
@@ -940,9 +933,6 @@
         const cbHtml = isGap
           ? '<input type="checkbox" class="gap-skill-cb" data-skill="' + escHtml(reqName) + '"' + isChecked + ' /> '
           : "";
-        const recEditable = isGap
-          ? ' contenteditable="true" spellcheck="true" lang="en-US" class="gap-rec-editable" data-orig="' + escHtml(row.recommendation || "") + '"'
-          : "";
         const recText = hasNote ? savedNotes[reqName] : (row.recommendation || "");
         const displayStatus = hasNote ? "edited" : status;
         const displayLabel = hasNote ? "Edited" : (row.status || "");
@@ -950,8 +940,8 @@
           "<td>" + cbHtml + escHtml(reqName) + "</td>" +
           "<td>" + escHtml(row.category || "") + "</td>" +
           '<td><span class="gap-status ' + displayStatus + '">' + escHtml(displayLabel) + '</span></td>' +
-          "<td" + recEditable + ">" + escHtml(recText) + "</td>";
-        if (isGap) {
+          '<td contenteditable="true" spellcheck="true" lang="en-US" class="gap-rec-editable" data-orig="' + escHtml(row.recommendation || "") + '">' + escHtml(recText) + "</td>";
+        {
           const recCell = tr.cells[3];
           const statusSpan = tr.cells[2].querySelector(".gap-status");
           recCell.addEventListener("input", function() {
@@ -965,6 +955,12 @@
               statusSpan.className = "gap-status " + status;
               statusSpan.textContent = row.status || "";
             }
+            /* Re-enable tailoring after edits */
+            gapAnalysisReady = true;
+            generateBtn.disabled = false;
+            generateBtn.textContent = "Generate Tailored CV";
+            generateBtn.classList.remove("hidden");
+            topDownloadLink.classList.add("hidden");
           });
         }
         gapSkillsBody.appendChild(tr);
@@ -979,6 +975,37 @@
       generateBtn.textContent = "Generate Tailored CV";
       generateBtn.classList.remove("hidden");
     }
+
+    /* Re-enable tailoring when checkboxes change */
+    gapSkillsBody.addEventListener("change", function(e) {
+      if (e.target.classList.contains("gap-skill-cb")) {
+        gapAnalysisReady = true;
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate Tailored CV";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+      }
+    });
+
+    /* Excel-like keyboard: Enter=next row, Shift+Enter=newline, Esc=blur */
+    gapSkillsBody.addEventListener("keydown", function(e) {
+      if (!e.target.classList.contains("gap-rec-editable")) return;
+      if (e.key === "Escape") {
+        e.target.textContent = e.target.dataset.orig || "";
+        e.target.dispatchEvent(new Event("input", {bubbles: true}));
+        e.target.blur();
+        e.preventDefault();
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const currentRow = e.target.closest("tr");
+        const nextRow = currentRow.nextElementSibling;
+        if (nextRow) {
+          const nextCell = nextRow.querySelector(".gap-rec-editable");
+          if (nextCell) { nextCell.focus(); return; }
+        }
+        e.target.blur();
+      }
+    });
 
     /* Sortable skills table */
     let gapSortCol = -1, gapSortAsc = true;
@@ -1003,9 +1030,13 @@
       });
     });
 
-    /* Download Fit Report JSON */
-    gapDownloadBtn.addEventListener("click", function() {
+    /* Download full CV JSON with _fit_session */
+    gapDownloadBtn.addEventListener("click", async function() {
       if (!currentGapData) return;
+      gapDownloadBtn.disabled = true;
+      gapDownloadBtn.textContent = "Saving...";
+
+      /* Collect current edits */
       const checkedSkills = [];
       const candidateNotes = {};
       gapSkillsBody.querySelectorAll(".gap-skill-cb").forEach(function(cb) {
@@ -1020,38 +1051,68 @@
           candidateNotes[skillName] = text;
         }
       });
-      const payload = {
+
+      /* Fetch full CV JSON from server */
+      let cvJson = {};
+      if (activeJobId) {
+        try {
+          const resp = await fetch("/jobs/" + activeJobId + "/cv_json");
+          if (resp.ok) cvJson = await resp.json();
+        } catch (e) { /* use empty if fetch fails */ }
+      }
+
+      /* Attach _fit_session */
+      cvJson._fit_session = {
+        jd_text: jdText.value,
         gap_analysis: currentGapData,
         user_edits: { checked_skills: checkedSkills, candidate_notes: candidateNotes }
       };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"});
+
+      const blob = new Blob([JSON.stringify(cvJson, null, 2)], {type: "application/json"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const baseName = (currentGapData && currentGapData._output_base) || "fit_report";
-      a.download = baseName + "_fit.json";
+      const baseName = (currentGapData && currentGapData._output_base) || "cv";
+      a.download = baseName + ".json";
       a.click();
       URL.revokeObjectURL(a.href);
+      gapDownloadBtn.disabled = false;
+      gapDownloadBtn.textContent = "Download JSON";
     });
 
-    /* Upload Fit Report JSON — immediately render saved Fit Report */
-    fitJsonFile.addEventListener("change", function() {
-      if (!fitJsonFile.files.length) { preloadedFitJson = null; return; }
+    /* Detect JSON CV upload — auto-fill JD and show Fit Report */
+    function handleJsonCvUpload(file) {
       const reader = new FileReader();
       reader.onload = function(e) {
         try {
-          const json = JSON.parse(e.target.result);
-          preloadedFitJson = json;
-          const gap = json.gap_analysis;
-          if (gap) {
-            renderGapAnalysis(gap, json.user_edits);
+          const raw = JSON.parse(e.target.result);
+          const fitSession = raw._fit_session;
+          if (fitSession) {
+            preloadedFitJson = { gap_analysis: fitSession.gap_analysis, user_edits: fitSession.user_edits };
+            /* Auto-fill JD */
+            if (fitSession.jd_text) {
+              jdText.value = fitSession.jd_text;
+              localStorage.setItem(STORAGE_KEYS.jd_text, fitSession.jd_text);
+            }
+            /* Auto-enable Tailor mode */
+            if (!tailorInput.checked) {
+              tailorInput.checked = true;
+              jdField.classList.remove("hidden");
+              document.getElementById("pageRoot").classList.add("tailor-mode");
+              savePrefs();
+            }
+            /* Show Fit Report immediately */
+            if (fitSession.gap_analysis) {
+              renderGapAnalysis(fitSession.gap_analysis, fitSession.user_edits);
+            }
+            updateBtnLabel();
           }
         } catch (err) {
+          /* Not valid JSON or no _fit_session — just let server handle it */
           preloadedFitJson = null;
-          alert("Invalid JSON file");
         }
       };
-      reader.readAsText(fitJsonFile.files[0]);
-    });
+      reader.readAsText(file);
+    }
 
     function escHtml(s) {
       const d = document.createElement("div");
@@ -1228,11 +1289,18 @@
 
     anonymizeInput.addEventListener("change", () => {
       savePrefs();
-      resetForNewInput();
+      if (hasGapData) {
+        gapAnalysisReady = true;
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate Tailored CV";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+      } else {
+        resetForNewInput();
+      }
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
-      fitJsonField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       /* Show/hide gap panel based on checkbox — preserve data */
       if (tailorInput.checked && hasGapData) {
@@ -1259,7 +1327,13 @@
     fileInput.addEventListener("change", () => {
       if (fileInput.files.length) {
         lastSelectedFile = fileInput.files[0];
+        preloadedFitJson = null;
         resetForNewInput();
+        /* If JSON file — parse and auto-fill */
+        const ext = lastSelectedFile.name.split(".").pop().toLowerCase();
+        if (ext === "json") {
+          handleJsonCvUpload(lastSelectedFile);
+        }
       } else if (lastSelectedFile) {
         /* Cancel pressed — restore previous file via DataTransfer */
         const dt = new DataTransfer();
@@ -1307,9 +1381,8 @@
       formData.append("tailor", tailorInput.checked ? "true" : "false");
       formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
-      if (preloadedFitJson) {
-        formData.append("skip_gap", "true");
-        /* Collect current edits from the rendered table */
+      /* If user loaded a JSON and edited Fit Report in the DOM, send current edits */
+      if (preloadedFitJson && hasGapData) {
         const fs = [], cn = {};
         gapSkillsBody.querySelectorAll(".gap-skill-cb:checked").forEach(function(cb) { fs.push(cb.dataset.skill); });
         gapSkillsBody.querySelectorAll(".gap-rec-editable").forEach(function(cell) {

@@ -345,7 +345,7 @@ def _build_processing_details(
     return details
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_candidate_notes: dict | None = None) -> None:
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_candidate_notes: dict | None = None, preloaded_data: dict | None = None) -> None:
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -400,7 +400,13 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             gap_ready_cb=gap_ready_cb,
             focus_skills_cb=focus_skills_cb if (pause_event or skip_gap) else None,
             candidate_notes_cb=candidate_notes_cb if (pause_event or skip_gap) else None,
+            preloaded_data=preloaded_data,
         )
+
+        # Store base CV JSON on job for download
+        base_json = getattr(job_engine, "_last_base_json", None)
+        if base_json and job:
+            setattr(job, "_cv_json", base_json)
 
         job = jobs.get(job_id)
         if job:
@@ -472,11 +478,8 @@ async def create_job(
     candidate_notes_json: str = Form(""),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
-    if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg"}:
-        raise HTTPException(status_code=400, detail="Only PDF, DOCX, PNG, JPG, and JPEG are supported.")
-
-    if tailor and not jd_text.strip():
-        raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
+    if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".json"}:
+        raise HTTPException(status_code=400, detail="Only PDF, DOCX, PNG, JPG, JPEG, and JSON are supported.")
 
     if not template_name:
         raise HTTPException(status_code=400, detail="Template is required.")
@@ -485,15 +488,9 @@ async def create_job(
     if not template_path.exists():
         raise HTTPException(status_code=400, detail=f"Unknown template: {template_name}")
 
-    job = jobs.create(
-        file.filename or "uploaded_file",
-        anonymize=anonymize,
-        autofix=autofix,
-        template_name=template_name,
-    )
+    # Read uploaded file
     workdir = make_temp_workspace()
     source_path = workdir / (file.filename or "uploaded_file")
-
     with source_path.open("wb") as f:
         while True:
             chunk = await file.read(1024 * 1024)
@@ -501,7 +498,43 @@ async def create_job(
                 break
             f.write(chunk)
 
-    source_key = build_source_key(source_path)
+    # Handle JSON CV upload: extract CV data and optional _fit_session
+    preloaded_data = None
+    fit_session = None
+    if suffix == ".json":
+        try:
+            raw = json.loads(source_path.read_text(encoding="utf-8"))
+            fit_session = raw.pop("_fit_session", None)
+            preloaded_data = raw  # remaining dict is the CV JSON
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON file: {exc}")
+
+        # If _fit_session contains JD and user didn't provide one, use it
+        if fit_session and not jd_text.strip():
+            jd_text = fit_session.get("jd_text", "")
+        # Auto-enable tailor if fit_session has JD
+        if fit_session and fit_session.get("jd_text", "").strip():
+            tailor = True
+        # Extract focus_skills and candidate_notes from fit_session
+        if fit_session:
+            user_edits = fit_session.get("user_edits", {})
+            if not focus_skills_json and user_edits.get("checked_skills"):
+                focus_skills_json = json.dumps(user_edits["checked_skills"])
+            if not candidate_notes_json and user_edits.get("candidate_notes"):
+                candidate_notes_json = json.dumps(user_edits["candidate_notes"])
+            skip_gap = True
+
+    if tailor and not jd_text.strip():
+        raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
+
+    job = jobs.create(
+        file.filename or "uploaded_file",
+        anonymize=anonymize,
+        autofix=autofix,
+        template_name=template_name,
+    )
+
+    source_key = build_source_key(source_path) if suffix != ".json" else None
 
     details = _build_processing_details(
         source_name=file.filename or source_path.name,
@@ -534,6 +567,7 @@ async def create_job(
         kwargs={
             "preloaded_focus_skills": json.loads(focus_skills_json) if focus_skills_json else None,
             "preloaded_candidate_notes": json.loads(candidate_notes_json) if candidate_notes_json else None,
+            "preloaded_data": preloaded_data,
         },
         daemon=True,
     )
@@ -569,6 +603,18 @@ def get_job(job_id: str):
     if gap:
         resp["gap_analysis"] = gap
     return resp
+
+
+@app.get("/jobs/{job_id}/cv_json")
+def get_cv_json(job_id: str):
+    """Return the extracted base CV JSON for this job."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    cv_json = getattr(job, "_cv_json", None)
+    if not cv_json:
+        raise HTTPException(status_code=404, detail="CV JSON not available yet")
+    return cv_json
 
 
 @app.get("/jobs/{job_id}/download")
