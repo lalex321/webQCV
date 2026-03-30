@@ -614,6 +614,13 @@ async def update_cv_json(job_id: str, request: Request):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     body = await request.json()
+    # Backup previous version
+    import copy
+    prev = getattr(job, "_cv_json", None)
+    if prev:
+        bak_list = getattr(job, "_cv_json_bak", [])
+        bak_list.append(copy.deepcopy(prev))
+        setattr(job, "_cv_json_bak", bak_list)
     setattr(job, "_cv_json", body)
     return {"ok": True}
 

@@ -439,10 +439,7 @@
     .cv-ed-highlights li:focus{background:#eff6ff;box-shadow:inset 0 0 0 2px #93c5fd}
     .cv-ed-row-actions{white-space:nowrap}
 
-    /* Tailor mode: wider layout */
-    .page.tailor-mode{max-width:960px}
-    .page.tailor-mode .shell{grid-template-columns:0.7fr 1.3fr}
-    .page.tailor-mode .lead{display:none}
+    /* Tailor mode: no layout change for shell — just show extra panels below */
 
     @media (max-width: 600px){
       .shell{grid-template-columns:1fr}
@@ -484,6 +481,7 @@
       <div class="right">
        
 
+        <input id="warnJson" type="checkbox" style="display:none" />
         <form id="uploadForm">
           <div class="field">
             <label for="file">Source CV</label>
@@ -610,7 +608,8 @@
       anonymize: "qcv_anonymize",
       template: "qcv_template",
       tailor: "qcv_tailor",
-      jd_text: "qcv_jd_text"
+      jd_text: "qcv_jd_text",
+      warn_json: "qcv_warn_json"
     };
 
     // --- Stats polling ---
@@ -636,6 +635,7 @@
     const templateSelect = document.getElementById("template");
     const anonymizeInput = document.getElementById("anonymize");
     const tailorInput = document.getElementById("tailor");
+    const warnJsonInput = document.getElementById("warnJson");
     const jdField = document.getElementById("jdField");
     const jdText = document.getElementById("jdText");
     const gapDownloadBtn = document.getElementById("gapDownloadBtn");
@@ -846,11 +846,13 @@
       localStorage.setItem(STORAGE_KEYS.anonymize, anonymizeInput.checked ? "1" : "0");
       localStorage.setItem(STORAGE_KEYS.template, templateSelect.value || "");
       localStorage.setItem(STORAGE_KEYS.tailor, tailorInput.checked ? "1" : "0");
+      localStorage.setItem(STORAGE_KEYS.warn_json, warnJsonInput.checked ? "1" : "0");
     }
 
     function loadPrefs() {
       anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
       tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
+      warnJsonInput.checked = localStorage.getItem(STORAGE_KEYS.warn_json) === "1";
       jdField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       jdText.value = localStorage.getItem(STORAGE_KEYS.jd_text) || "";
@@ -945,12 +947,13 @@
       currentGapData = null;
       cvEditorPanel.classList.add("hidden");
       cvEditorPanel.classList.remove("open");
-      cvData = null; cvDirty = false;
+      cvData = null; cvDataOrig = null; cvDirty = false;
     }
 
     function renderGapAnalysis(gap, savedEdits) {
       currentGapData = gap;
       lastAnalyzedJd = jdText.value;
+      updateSaveBtn();
       const pct = gap.match_percentage || 0;
       const tier = pct >= 70 ? "high" : pct >= 40 ? "medium" : "low";
       gapMatchRing.className = "gap-match-ring " + tier;
@@ -1123,6 +1126,7 @@
             cvEditorPanel.classList.remove("hidden");
             renderCvTab("basics");
             updateBtnLabel();
+            updateSaveBtn();
           }
         } catch (err) {
           /* Not valid JSON or no _fit_session — just let server handle it */
@@ -1180,6 +1184,7 @@
         cvDirty = false;
         cvEditorPanel.classList.remove("hidden");
         renderCvTab("basics");
+        updateSaveBtn();
       } catch(e) {}
     }
 
@@ -1195,36 +1200,56 @@
       });
     }
 
-    /* Re-analyze: save edits, re-run gap analysis, refresh Fit Report */
+    /* Save / Re-analyze button */
     const reanalyzeBtn = document.getElementById("reanalyzeBtn");
     const reanalyzeStatus = document.getElementById("reanalyzeStatus");
+
+    function updateSaveBtn() {
+      if (hasGapData && tailorInput.checked) {
+        reanalyzeBtn.textContent = "Save & Re-analyze Fit";
+      } else {
+        reanalyzeBtn.textContent = "Save";
+      }
+    }
+
     reanalyzeBtn.addEventListener("click", async function() {
       if (!activeJobId || !cvData) return;
+      if (!cvDirty) { reanalyzeStatus.textContent = "No changes"; setTimeout(function() { reanalyzeStatus.textContent = ""; }, 2000); return; }
+
+      if (warnJsonInput.checked && !confirm("Save changes to CV JSON?")) return;
+
       reanalyzeBtn.disabled = true;
       generateBtn.disabled = true;
-      reanalyzeStatus.textContent = "Saving edits...";
+      reanalyzeStatus.textContent = "Saving...";
       await saveCvEdits();
-      reanalyzeStatus.textContent = "Analyzing...";
-      try {
-        const resp = await fetch("/jobs/" + activeJobId + "/reanalyze", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ jd_text: jdText.value })
-        });
-        if (!resp.ok) {
-          const err = await resp.json().catch(function() { return {}; });
-          reanalyzeStatus.textContent = err.detail || "Failed";
-          reanalyzeBtn.disabled = false;
-          return;
+
+      /* If tailor mode with gap data — also re-analyze */
+      if (hasGapData && tailorInput.checked && jdText.value.trim()) {
+        reanalyzeStatus.textContent = "Analyzing...";
+        try {
+          const resp = await fetch("/jobs/" + activeJobId + "/reanalyze", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ jd_text: jdText.value })
+          });
+          if (!resp.ok) {
+            const err = await resp.json().catch(function() { return {}; });
+            reanalyzeStatus.textContent = err.detail || "Failed";
+            reanalyzeBtn.disabled = false;
+            return;
+          }
+          const gap = await resp.json();
+          renderGapAnalysis(gap);
+          reanalyzeStatus.textContent = "Updated!";
+          generateBtn.disabled = false;
+        } catch(e) {
+          reanalyzeStatus.textContent = e.message || "Error";
         }
-        const gap = await resp.json();
-        renderGapAnalysis(gap);
-        reanalyzeStatus.textContent = "Updated!";
-        setTimeout(function() { reanalyzeStatus.textContent = ""; }, 2000);
+      } else {
+        reanalyzeStatus.textContent = "Saved!";
         generateBtn.disabled = false;
-      } catch(e) {
-        reanalyzeStatus.textContent = e.message || "Error";
       }
+      setTimeout(function() { reanalyzeStatus.textContent = ""; }, 2000);
       reanalyzeBtn.disabled = false;
     });
 
@@ -1783,20 +1808,40 @@
         generateBtn.textContent = "Generate Tailored CV";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
-      } else {
-        resetForNewInput();
       }
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       /* Show/hide gap panel based on checkbox — preserve data */
-      if (tailorInput.checked && hasGapData) {
-        gapPanel.classList.remove("hidden");
+      if (tailorInput.checked) {
+        if (hasGapData) {
+          gapPanel.classList.remove("hidden");
+          gapAnalysisReady = true;
+          generateBtn.disabled = false;
+          generateBtn.textContent = "Generate Tailored CV";
+          generateBtn.classList.remove("hidden");
+          topDownloadLink.classList.add("hidden");
+        } else {
+          /* Switch from Download to Analyze */
+          generateBtn.disabled = false;
+          generateBtn.textContent = "Analyze";
+          generateBtn.classList.remove("hidden");
+          topDownloadLink.classList.add("hidden");
+        }
       } else {
         gapPanel.classList.add("hidden");
+        /* If job was done, restore Download; otherwise show Convert */
+        if (topDownloadLink.getAttribute("href")) {
+          generateBtn.classList.add("hidden");
+          topDownloadLink.classList.remove("hidden");
+        } else {
+          generateBtn.disabled = false;
+          generateBtn.textContent = "Convert";
+          generateBtn.classList.remove("hidden");
+        }
       }
-      updateBtnLabel();
+      updateSaveBtn();
       savePrefs();
     });
     jdText.addEventListener("focus", () => {
@@ -1816,6 +1861,7 @@
         updateBtnLabel();
       }
     });
+    warnJsonInput.addEventListener("change", () => { savePrefs(); });
     templateSelect.addEventListener("change", () => {
       savePrefs();
       resetForNewInput();
