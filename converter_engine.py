@@ -780,7 +780,7 @@ class QCVWebEngine:
         input_json_str = json.dumps(data, ensure_ascii=False)
         prompt = prompt_template.replace("{jd_text}", jd_text).replace("{input_json_str}", input_json_str)
         if focus_skills:
-            focus_block = "\n\nFOCUS SKILLS (user-selected gaps to address during tailoring):\n- " + "\n- ".join(focus_skills) + "\n\nPrioritize weaving these skills into the CV where the candidate has relevant experience. Do NOT fabricate experience for skills the candidate lacks."
+            focus_block = "\n\nFOCUS SKILLS (user-selected gaps to address during tailoring):\n- " + "\n- ".join(focus_skills) + "\n\nFor each focus skill: if the candidate has direct or partial experience, emphasize and strengthen the wording. For skills the candidate lacks entirely, ONLY highlight transferable experience from adjacent technologies — NEVER add skills, projects, certifications, or job duties the candidate did not mention in the original CV."
             prompt += focus_block
         raw_data = call_llm_json(prompt, self.model_name)
         cv_data = raw_data.get("cv", raw_data) if isinstance(raw_data, dict) else raw_data

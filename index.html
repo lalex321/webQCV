@@ -90,7 +90,7 @@
       grid-template-columns:1.0fr 1.0fr;
     }
     .left,.right{padding:24px 28px}
-    .right{border-left:1px solid #c8d3e0; background:rgba(248,250,252,.76)}
+    .right{border-left:1px solid #c8d3e0; background:rgba(248,250,252,.76); align-self:start}
     .eyebrow{
       display:inline-flex;
       align-items:center;
@@ -366,8 +366,9 @@
     .gap-list.strengths li::marker{color:#16a34a}
     .gap-list.weaknesses li::marker{color:#dc2626}
     .gap-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
-    .gap-table th{background:#f1f5f9;text-align:left;padding:7px 8px;font-weight:700;border-bottom:2px solid #e2e8f0}
-    .gap-table td{padding:6px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+    .gap-table th{background:#f1f5f9;text-align:left;padding:7px 8px;font-weight:700;border-bottom:2px solid #64748b}
+    .gap-table td{padding:6px 8px;border-bottom:2px solid #64748b;vertical-align:top}
+    .gap-table tbody tr:nth-child(even){background:#f1f5f9}
     .gap-status{display:inline-block;padding:2px 8px;border-radius:8px;font-weight:700;font-size:11px}
     .gap-status.covered{background:#dcfce7;color:#16a34a}
     .gap-status.partial{background:#fef3c7;color:#d97706}
@@ -396,6 +397,7 @@
     /* Tailor mode: wider layout */
     .page.tailor-mode{max-width:960px}
     .page.tailor-mode .shell{grid-template-columns:0.7fr 1.3fr}
+    .page.tailor-mode .lead{display:none}
 
     @media (max-width: 600px){
       .shell{grid-template-columns:1fr}
@@ -886,7 +888,13 @@
       });
 
       gapSkillsBody.innerHTML = "";
-      (gap.skills_table || []).forEach(function(row) {
+      const statusOrder = {covered: 0, partial: 1, missing: 2};
+      const sortedSkills = (gap.skills_table || []).slice().sort(function(a, b) {
+        const sa = (a.status || "").toLowerCase().replace(/\s+/g, "");
+        const sb = (b.status || "").toLowerCase().replace(/\s+/g, "");
+        return (statusOrder[sa] ?? 3) - (statusOrder[sb] ?? 3);
+      });
+      sortedSkills.forEach(function(row) {
         const tr = document.createElement("tr");
         const status = (row.status || "").toLowerCase().replace(/\s+/g, "");
         const isGap = status === "partial" || status === "missing";
@@ -938,7 +946,6 @@
           generateBtn.textContent = "Generate Tailored CV";
           return;
         }
-        gapPanel.classList.add("hidden");
         gapAnalysisReady = false;
         statusBox.style.display = "block";
         setStatus("Tailoring to JD", 60, "");
@@ -1097,7 +1104,19 @@
       savePrefs();
       resetForNewInput();
     });
-    fileInput.addEventListener("change", resetForNewInput);
+    /* Preserve previously selected file if user cancels file picker */
+    let lastSelectedFile = null;
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) {
+        lastSelectedFile = fileInput.files[0];
+        resetForNewInput();
+      } else if (lastSelectedFile) {
+        /* Cancel pressed — restore previous file via DataTransfer */
+        const dt = new DataTransfer();
+        dt.items.add(lastSelectedFile);
+        fileInput.files = dt.files;
+      }
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
