@@ -267,6 +267,7 @@ DEFAULT_PROMPTS = {
 9. **CANONICAL SECTION ROUTING:** Core content must go only into its canonical sections: `basics`, `summary`, `skills`, `experience`, `education`, `certifications`, `languages`. Degrees must go to `education`, certifications to `certifications`, and language items with proficiency/test details to `languages`. **SKILLS SECTION DETECTION:** Sections titled "Technical Expertise", "Technical Skills", "Core Competencies", "Technologies", "Tech Stack", or similar MUST be parsed into the `skills` dict, NOT placed in `other_sections`. Parse "Category: item1, item2" patterns into `{"Category": ["item1", "item2"]}`.
 10. **OTHER_SECTIONS ONLY:** Any remaining non-core content must go only into `other_sections`. Do not create, use, or reference `custom_sections`.
 11. **CLEAN OUTPUT:** Use only empty strings `""` or arrays `[]` for missing values. Never output `None`, `null`, or placeholders. Keep wording faithful to the source but readable in professional US English. Avoid accidental ALL CAPS except for true acronyms or proper names.
+12. **FIX TYPOS & GRAMMAR:** Silently fix obvious spelling mistakes, typos, grammatical errors, and incorrect product/brand capitalization. Do NOT change factual content, proper names of people, or technical terms that may look unusual but are correct.
 
 **FINAL CHECK:**
 - all human-readable text is in US English
