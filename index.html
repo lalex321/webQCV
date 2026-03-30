@@ -365,8 +365,14 @@
     .gap-list{margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:#334155}
     .gap-list.strengths li::marker{color:#16a34a}
     .gap-list.weaknesses li::marker{color:#dc2626}
-    .gap-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
-    .gap-table th{background:#f1f5f9;text-align:left;padding:7px 8px;font-weight:700;border-bottom:2px solid #64748b}
+    .gap-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;table-layout:fixed}
+    .gap-table th:nth-child(1),.gap-table td:nth-child(1){width:30%}
+    .gap-table th:nth-child(2),.gap-table td:nth-child(2){width:12%}
+    .gap-table th:nth-child(3),.gap-table td:nth-child(3){width:10%}
+    .gap-table th:nth-child(4),.gap-table td:nth-child(4){width:48%}
+    .gap-table th{background:#f1f5f9;text-align:left;padding:7px 8px;font-weight:700;border-bottom:2px solid #64748b;cursor:pointer;user-select:none}
+    .gap-table th:hover{background:#e2e8f0}
+    .gap-table th .sort-arrow{font-size:10px;margin-left:4px;color:#94a3b8}
     .gap-table td{padding:6px 8px;border-bottom:2px solid #64748b;vertical-align:top}
     .gap-table tbody tr:nth-child(even){background:#f1f5f9}
     .gap-status{display:inline-block;padding:2px 8px;border-radius:8px;font-weight:700;font-size:11px}
@@ -508,7 +514,7 @@
       </div>
       <div class="gap-section-title">Skills Assessment</div>
       <table class="gap-table">
-        <thead><tr><th>Requirement</th><th>Category</th><th>Status</th><th>Recommendation</th></tr></thead>
+        <thead><tr><th data-col="0">Requirement <span class="sort-arrow"></span></th><th data-col="1">Category <span class="sort-arrow"></span></th><th data-col="2">Status <span class="sort-arrow"></span></th><th data-col="3">Recommendation <span class="sort-arrow"></span></th></tr></thead>
         <tbody id="gapSkillsBody"></tbody>
       </table>
     </div>
@@ -590,6 +596,7 @@
 
     let activeJobId = null;
     let gapAnalysisReady = false;
+    let hasGapData = false;
     let jobRefined = false;
     let lastSubmittedFile = null;
     let detailsLines = [];
@@ -864,6 +871,7 @@
       pollErrorCount = 0;
       gapPanel.classList.add("hidden");
       gapAnalysisReady = false;
+      hasGapData = false;
     }
 
     function renderGapAnalysis(gap) {
@@ -914,10 +922,34 @@
       gapPanel.classList.remove("hidden");
       // Transform the main button into "Generate Tailored CV"
       gapAnalysisReady = true;
+      hasGapData = true;
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate Tailored CV";
       generateBtn.classList.remove("hidden");
     }
+
+    /* Sortable skills table */
+    let gapSortCol = -1, gapSortAsc = true;
+    document.querySelectorAll(".gap-table th[data-col]").forEach(function(th) {
+      th.addEventListener("click", function() {
+        const col = parseInt(th.dataset.col);
+        if (gapSortCol === col) { gapSortAsc = !gapSortAsc; } else { gapSortCol = col; gapSortAsc = true; }
+        const statusOrder = {covered: 0, partial: 1, missing: 2};
+        const rows = Array.from(gapSkillsBody.querySelectorAll("tr"));
+        rows.sort(function(a, b) {
+          const at = a.cells[col].textContent.trim().toLowerCase();
+          const bt = b.cells[col].textContent.trim().toLowerCase();
+          if (col === 2) {
+            const diff = (statusOrder[at] ?? 3) - (statusOrder[bt] ?? 3);
+            return gapSortAsc ? diff : -diff;
+          }
+          return gapSortAsc ? at.localeCompare(bt) : bt.localeCompare(at);
+        });
+        rows.forEach(function(r) { gapSkillsBody.appendChild(r); });
+        document.querySelectorAll(".gap-table th .sort-arrow").forEach(function(s) { s.textContent = ""; });
+        th.querySelector(".sort-arrow").textContent = gapSortAsc ? "▲" : "▼";
+      });
+    });
 
     function escHtml(s) {
       const d = document.createElement("div");
@@ -1085,7 +1117,7 @@
       jdField.classList.toggle("hidden", !tailorInput.checked);
       document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       /* Show/hide gap panel based on checkbox — preserve data */
-      if (tailorInput.checked && gapAnalysisReady) {
+      if (tailorInput.checked && hasGapData) {
         gapPanel.classList.remove("hidden");
       } else {
         gapPanel.classList.add("hidden");
