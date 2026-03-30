@@ -772,18 +772,50 @@ class QCVWebEngine:
         else:
             return "LOW"
 
-    def _apply_tailor(self, data: dict, jd_text: str) -> dict:
+    def _apply_tailor(self, data: dict, jd_text: str, focus_skills: list | None = None) -> dict:
         """Tailor the extracted CV JSON to match a Job Description."""
         prompt_template = self.config.get("prompt_tailor", core.DEFAULT_PROMPTS.get("prompt_tailor", ""))
         if not prompt_template:
             return data
         input_json_str = json.dumps(data, ensure_ascii=False)
         prompt = prompt_template.replace("{jd_text}", jd_text).replace("{input_json_str}", input_json_str)
+        if focus_skills:
+            focus_block = "\n\nFOCUS SKILLS (user-selected gaps to address during tailoring):\n- " + "\n- ".join(focus_skills) + "\n\nPrioritize weaving these skills into the CV where the candidate has relevant experience. Do NOT fabricate experience for skills the candidate lacks."
+            prompt += focus_block
         raw_data = call_llm_json(prompt, self.model_name)
         cv_data = raw_data.get("cv", raw_data) if isinstance(raw_data, dict) else raw_data
         if hasattr(core, "sanitize_json"):
             cv_data = core.sanitize_json(cv_data)
         return cv_data
+
+    def _analyze_gap(self, data: dict, jd_text: str) -> dict:
+        """LLM-based gap analysis: compare CV JSON against JD, return structured assessment."""
+        prompt_template = self.config.get(
+            "prompt_gap_analysis",
+            core.DEFAULT_PROMPTS.get("prompt_gap_analysis", ""),
+        )
+        if not prompt_template:
+            return {}
+        cv_json_str = json.dumps(data, ensure_ascii=False)
+        prompt = prompt_template.replace("{jd_text}", jd_text).replace("{cv_json}", cv_json_str)
+        raw = call_llm_json(prompt, self.model_name)
+        # Validate and fill defaults
+        result = {
+            "match_percentage": int(raw.get("match_percentage", 0)),
+            "summary": str(raw.get("summary", "")),
+            "strengths": list(raw.get("strengths", [])),
+            "weaknesses": list(raw.get("weaknesses", [])),
+            "skills_table": [],
+        }
+        for row in raw.get("skills_table", []):
+            if isinstance(row, dict) and "requirement" in row:
+                result["skills_table"].append({
+                    "requirement": str(row.get("requirement", "")),
+                    "category": str(row.get("category", "Nice To Have")),
+                    "status": str(row.get("status", "Missing")),
+                    "recommendation": str(row.get("recommendation", "")),
+                })
+        return result
 
     def _generate_docx(
         self,
@@ -898,6 +930,9 @@ class QCVWebEngine:
         source_key: str | None = None,
         status_cb: Optional[StatusCallback] = None,
         debug_cb: Optional[Callable[[str], None]] = None,
+        pause_event: Optional[threading.Event] = None,
+        gap_ready_cb: Optional[Callable[[dict], None]] = None,
+        focus_skills_cb: Optional[Callable[[], list]] = None,
     ) -> Path:
         source_path = Path(source_path)
         self.last_content_details = None
@@ -941,12 +976,32 @@ class QCVWebEngine:
 
         if tailor and jd_text.strip():
             if not force_tailor:
-                self._status(status_cb, "Checking relevance", 65)
+                self._status(status_cb, "Checking relevance", 45)
                 relevance = self._check_relevance(data, jd_text)
                 if relevance == "LOW":
                     raise LowRelevanceError("This CV does not appear relevant to the provided Job Description.")
+
+            # Gap analysis: LLM compares CV vs JD before tailoring
+            try:
+                self._status(status_cb, "Analyzing fit", 50)
+                gap_result = self._analyze_gap(data, jd_text)
+                self._last_gap_analysis = gap_result
+                if gap_ready_cb and gap_result:
+                    gap_ready_cb(gap_result)
+                if pause_event is not None:
+                    self._status(status_cb, "gap_analysis_ready", 55)
+                    if not pause_event.wait(timeout=600):
+                        raise RuntimeError("Gap analysis timed out — user did not proceed within 10 minutes.")
+            except (RuntimeError,) as gap_err:
+                if "timed out" in str(gap_err):
+                    raise
+                self._debug(debug_cb, f"Gap analysis failed, proceeding: {gap_err}")
+
+            # Collect user-selected focus skills (if any)
+            focus_skills = focus_skills_cb() if focus_skills_cb else []
+
             self._status(status_cb, "Tailoring to JD", 70)
-            data = self._apply_tailor(data, jd_text)
+            data = self._apply_tailor(data, jd_text, focus_skills=focus_skills)
             self._last_tailored_json = copy.deepcopy(data)
 
         if anonymize:

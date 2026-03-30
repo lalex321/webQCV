@@ -353,6 +353,23 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         def dbg(text: str) -> None:
             jobs.update(job_id, debug=text)
 
+        # Create pause event for gap analysis (tailor jobs only)
+        pause_event = None
+        gap_ready_cb = None
+        if tailor and jd_text.strip():
+            import threading
+            pause_event = threading.Event()
+
+            def gap_ready_cb(gap_result: dict) -> None:
+                job = jobs.get(job_id)
+                if job:
+                    setattr(job, "_gap_analysis", gap_result)
+                    setattr(job, "_pause_event", pause_event)
+
+            def focus_skills_cb() -> list:
+                job = jobs.get(job_id)
+                return getattr(job, "_focus_skills", []) if job else []
+
         job_engine = QCVWebEngine(TEMPLATES_DIR)
         result_path = job_engine.process(
             source_path=source_path,
@@ -366,6 +383,9 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             source_key=source_key,
             status_cb=cb,
             debug_cb=dbg,
+            pause_event=pause_event,
+            gap_ready_cb=gap_ready_cb,
+            focus_skills_cb=focus_skills_cb if pause_event else None,
         )
 
         job = jobs.get(job_id)
@@ -514,7 +534,7 @@ def get_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    return {
+    resp = {
         "job_id": job.job_id,
         "filename": job.filename,
         "status": job.status,
@@ -524,6 +544,10 @@ def get_job(job_id: str):
         "ready": bool(job.result_path),
         "details": getattr(job, "details", None),
     }
+    gap = getattr(job, "_gap_analysis", None)
+    if gap:
+        resp["gap_analysis"] = gap
+    return resp
 
 
 @app.get("/jobs/{job_id}/download")
@@ -626,3 +650,29 @@ async def refine_job(job_id: str, request: Request):
     thread.start()
 
     return {"job_id": job_id, "status": "Refining"}
+
+
+@app.post("/jobs/{job_id}/continue")
+async def continue_job(job_id: str, request: Request):
+    """Unblock a job paused at gap_analysis_ready to proceed with tailoring."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "gap_analysis_ready":
+        raise HTTPException(status_code=400, detail="Job is not waiting for continuation")
+
+    pause_event = getattr(job, "_pause_event", None)
+    if not pause_event:
+        raise HTTPException(status_code=400, detail="No pause event found")
+
+    # Store focus skills selected by user for the tailor prompt
+    try:
+        body = await request.json()
+        focus_skills = body.get("focus_skills", [])
+    except Exception:
+        focus_skills = []
+    if focus_skills:
+        setattr(job, "_focus_skills", focus_skills)
+
+    pause_event.set()
+    return {"job_id": job_id, "status": "Resuming"}

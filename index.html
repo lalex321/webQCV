@@ -24,7 +24,8 @@
       color:var(--text);
     }
     .page{
-      max-width:800px;
+      max-width:820px;
+      transition:max-width .3s ease;
       margin:18px auto 28px;
       padding:0 16px;
     }
@@ -340,6 +341,47 @@
     .refine-btn:hover{background:#4338ca}
     .refine-btn:disabled{background:#a5b4fc;cursor:not-allowed}
     .refine-status{font-size:12px;color:#64748b}
+
+    /* Gap Analysis Panel */
+    .gap-panel{padding:0;margin-top:14px}
+    .gap-header{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+    .gap-match-ring{
+      width:62px;height:62px;border-radius:50%;
+      display:flex;align-items:center;justify-content:center;
+      font-size:19px;font-weight:900;flex-shrink:0;
+    }
+    .gap-match-ring.high{border:4px solid #22c55e;color:#16a34a}
+    .gap-match-ring.medium{border:4px solid #f59e0b;color:#d97706}
+    .gap-match-ring.low{border:4px solid #ef4444;color:#dc2626}
+    .gap-summary{font-size:13px;color:#334155;line-height:1.5}
+    .gap-section-title{
+      font-size:12px;font-weight:800;letter-spacing:.04em;
+      text-transform:uppercase;color:#64748b;margin:14px 0 6px;
+    }
+    .gap-list{margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:#334155}
+    .gap-list.strengths li::marker{color:#16a34a}
+    .gap-list.weaknesses li::marker{color:#dc2626}
+    .gap-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    .gap-table th{background:#f1f5f9;text-align:left;padding:7px 8px;font-weight:700;border-bottom:2px solid #e2e8f0}
+    .gap-table td{padding:6px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+    .gap-status{display:inline-block;padding:2px 8px;border-radius:8px;font-weight:700;font-size:11px}
+    .gap-status.covered{background:#dcfce7;color:#16a34a}
+    .gap-status.partial{background:#fef3c7;color:#d97706}
+    .gap-status.missing{background:#fee2e2;color:#dc2626}
+    .gap-proceed-row{margin-top:16px;display:flex;gap:10px;align-items:center}
+    .gap-proceed-btn{
+      background:var(--primary);color:#fff;border:none;
+      padding:11px 28px;border-radius:14px;font-size:14px;
+      font-weight:700;cursor:pointer;
+    }
+    .gap-proceed-btn:hover{background:var(--primary-hover)}
+    .gap-proceed-btn:disabled{background:#94a3b8;cursor:not-allowed}
+    .gap-skill-cb{margin-right:6px;vertical-align:middle;cursor:pointer}
+
+    /* Tailor mode: wider layout */
+    .page.tailor-mode{max-width:1060px}
+    .page.tailor-mode .shell{grid-template-columns:0.8fr 1.2fr}
+
     @media (max-width: 600px){
       .shell{grid-template-columns:1fr}
       .right{border-left:0;border-top:1px solid var(--line)}
@@ -350,7 +392,7 @@
   </style>
 </head>
 <body>
-  <div class="page">
+  <div class="page" id="pageRoot">
     <div class="topbar">
       <img class="brand-logo" src="/images/Quantori_logo.png" alt="Quantori" />
       <div>Quantori </div>
@@ -403,7 +445,7 @@
           </div>
           <div id="jdField" class="field hidden">
             <label for="jdText">Job Description</label>
-            <textarea id="jdText" rows="5" placeholder="Paste the job description here..." style="display:block;width:100%;padding:11px 14px;border:1px solid #cfd8e3;border-radius:18px;background:#fff;color:#111827;font-size:15px;font-family:inherit;resize:vertical;"></textarea>
+            <textarea id="jdText" rows="8" placeholder="Paste the job description here..." style="display:block;width:100%;padding:11px 14px;border:1px solid #cfd8e3;border-radius:18px;background:#fff;color:#111827;font-size:15px;font-family:inherit;resize:vertical;min-height:140px;"></textarea>
           </div>
 
           <div class="action-row">
@@ -421,7 +463,26 @@
           <div class="progress"><div id="progressBar" class="bar"></div></div>
           <div id="errorText" class="error"></div>
           <div style="margin-top:14px;">
-            <button id="detailsBtn" class="details-link hidden" type="button">Show details</button>
+            <button id="detailsBtn" class="details-link hidden" type="button" style="display:none">Show details</button>
+          </div>
+        </div>
+
+        <div id="gapPanel" class="gap-panel hidden">
+          <div class="gap-header">
+            <div id="gapMatchRing" class="gap-match-ring"></div>
+            <div id="gapSummary" class="gap-summary"></div>
+          </div>
+          <div class="gap-section-title">Strengths</div>
+          <ul id="gapStrengths" class="gap-list strengths"></ul>
+          <div class="gap-section-title">Weaknesses</div>
+          <ul id="gapWeaknesses" class="gap-list weaknesses"></ul>
+          <div class="gap-section-title">Skills Assessment</div>
+          <table class="gap-table">
+            <thead><tr><th>Requirement</th><th>Category</th><th>Status</th><th>Recommendation</th></tr></thead>
+            <tbody id="gapSkillsBody"></tbody>
+          </table>
+          <div class="gap-proceed-row">
+            <button id="gapProceedBtn" class="gap-proceed-btn" type="button">Generate Tailored CV</button>
           </div>
         </div>
       </div>
@@ -493,6 +554,14 @@
     const refineBar = document.getElementById("refineBar");
     const refineBtn = document.getElementById("refineBtn");
     const refineStatus = document.getElementById("refineStatus");
+
+    const gapPanel = document.getElementById("gapPanel");
+    const gapMatchRing = document.getElementById("gapMatchRing");
+    const gapSummary = document.getElementById("gapSummary");
+    const gapStrengths = document.getElementById("gapStrengths");
+    const gapWeaknesses = document.getElementById("gapWeaknesses");
+    const gapSkillsBody = document.getElementById("gapSkillsBody");
+    const gapProceedBtn = document.getElementById("gapProceedBtn");
 
     let activeJobId = null;
     let jobRefined = false;
@@ -680,6 +749,7 @@
       anonymizeInput.checked = localStorage.getItem(STORAGE_KEYS.anonymize) === "1";
       tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
       jdField.classList.toggle("hidden", !tailorInput.checked);
+      document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
       jdText.value = localStorage.getItem(STORAGE_KEYS.jd_text) || "";
     }
 
@@ -705,19 +775,25 @@
       }
     }
 
+    function updateBtnLabel() {
+      if (!generateBtn.disabled) {
+        generateBtn.textContent = tailorInput.checked ? "Analyze" : "Convert";
+      }
+    }
+
     function setPrimaryAction(mode, downloadHref = "") {
       if (mode === "idle") {
         generateBtn.disabled = false;
-        generateBtn.textContent = "Convert";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
         topDownloadLink.removeAttribute("href");
+        updateBtnLabel();
         return;
       }
 
       if (mode === "running") {
         generateBtn.disabled = true;
-        generateBtn.textContent = "Converting...";
+        generateBtn.textContent = tailorInput.checked ? "Analyzing..." : "Converting...";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
         topDownloadLink.removeAttribute("href");
@@ -733,10 +809,10 @@
 
       if (mode === "failed") {
         generateBtn.disabled = false;
-        generateBtn.textContent = "Generate";
         generateBtn.classList.remove("hidden");
         topDownloadLink.classList.add("hidden");
         topDownloadLink.removeAttribute("href");
+        updateBtnLabel();
       }
     }
 
@@ -760,7 +836,92 @@
       setPrimaryAction("idle");
       setStatus("Queued", 0, "");
       pollErrorCount = 0;
+      gapPanel.classList.add("hidden");
+      gapProceedBtn.disabled = false;
+      gapProceedBtn.textContent = "Generate Tailored CV";
     }
+
+    function renderGapAnalysis(gap) {
+      const pct = gap.match_percentage || 0;
+      const tier = pct >= 70 ? "high" : pct >= 40 ? "medium" : "low";
+      gapMatchRing.className = "gap-match-ring " + tier;
+      gapMatchRing.textContent = pct + "%";
+      gapSummary.textContent = gap.summary || "";
+
+      gapStrengths.innerHTML = "";
+      (gap.strengths || []).forEach(function(s) {
+        const li = document.createElement("li");
+        li.textContent = s;
+        gapStrengths.appendChild(li);
+      });
+
+      gapWeaknesses.innerHTML = "";
+      (gap.weaknesses || []).forEach(function(w) {
+        const li = document.createElement("li");
+        li.textContent = w;
+        gapWeaknesses.appendChild(li);
+      });
+
+      gapSkillsBody.innerHTML = "";
+      (gap.skills_table || []).forEach(function(row) {
+        const tr = document.createElement("tr");
+        const status = (row.status || "").toLowerCase().replace(/\s+/g, "");
+        const isGap = status === "partial" || status === "missing";
+        const isChecked = status === "partial" ? " checked" : "";
+        const cbHtml = isGap
+          ? '<input type="checkbox" class="gap-skill-cb" data-skill="' + escHtml(row.requirement || "") + '"' + isChecked + ' /> '
+          : "";
+        tr.innerHTML =
+          "<td>" + cbHtml + escHtml(row.requirement || "") + "</td>" +
+          "<td>" + escHtml(row.category || "") + "</td>" +
+          '<td><span class="gap-status ' + status + '">' + escHtml(row.status || "") + '</span></td>' +
+          "<td>" + escHtml(row.recommendation || "") + "</td>";
+        gapSkillsBody.appendChild(tr);
+      });
+
+      statusBox.style.display = "none";
+      gapPanel.classList.remove("hidden");
+    }
+
+    function escHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    gapProceedBtn.addEventListener("click", async function() {
+      if (!activeJobId) return;
+      gapProceedBtn.disabled = true;
+      gapProceedBtn.textContent = "Generating...";
+      // Collect checked gap skills (Partial/Missing that user wants to address)
+      const focusSkills = [];
+      gapSkillsBody.querySelectorAll(".gap-skill-cb:checked").forEach(function(cb) {
+        focusSkills.push(cb.dataset.skill);
+      });
+      try {
+        const resp = await fetch("/jobs/" + activeJobId + "/continue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ focus_skills: focusSkills })
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(function() { return {}; });
+          errorText.textContent = err.detail || "Failed to continue";
+          gapProceedBtn.disabled = false;
+          gapProceedBtn.textContent = "Generate Tailored CV";
+          return;
+        }
+        gapPanel.classList.add("hidden");
+        statusBox.style.display = "block";
+        setStatus("Tailoring to JD", 60, "");
+        setPrimaryAction("running");
+        pollTimer = setInterval(function() { pollJob(activeJobId); }, 1500);
+      } catch (e) {
+        errorText.textContent = e.message || "Network error";
+        gapProceedBtn.disabled = false;
+        gapProceedBtn.textContent = "Generate Tailored CV";
+      }
+    });
 
     function stopPolling() {
       if (pollTimer) {
@@ -779,18 +940,16 @@
         setStatus(data.status, data.progress, data.error);
         detailsPayload = data.details || detailsPayload;
 
+        // Gap analysis ready — show analysis panel, pause polling
+        if (data.status === "gap_analysis_ready" && data.gap_analysis) {
+          stopPolling();
+          renderGapAnalysis(data.gap_analysis);
+          return;
+        }
+
         if (data.ready) {
           stopPolling();
           setPrimaryAction("done", `/jobs/${jobId}/download`);
-          // Show details link + auto-open modal only when there are missing JD keywords
-          const cd = (data.details || {}).content_details || {};
-          const kwReport = cd.jd_keyword_report;
-          if (kwReport && kwReport.missing && kwReport.missing.length > 0) {
-            detailsBtn.classList.remove("hidden");
-            openDetailsModal();
-          } else {
-            detailsBtn.classList.add("hidden");
-          }
           return;
         }
 
@@ -889,6 +1048,8 @@
     });
     tailorInput.addEventListener("change", () => {
       jdField.classList.toggle("hidden", !tailorInput.checked);
+      document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
+      updateBtnLabel();
       savePrefs();
       resetForNewInput();
     });

@@ -371,6 +371,39 @@ Schema:
 ]
 Request: {user_input}""",
 
+    "prompt_gap_analysis": """You are an expert CV-to-Job-Description fit analyst. Analyze how well this candidate matches the job requirements.
+
+JOB DESCRIPTION:
+{jd_text}
+
+CANDIDATE CV (extracted JSON):
+{cv_json}
+
+Return a JSON object with this EXACT structure:
+{{
+  "match_percentage": <integer 0-100>,
+  "summary": "<2-3 sentence overall fit assessment>",
+  "strengths": ["<strength 1>", "<strength 2>", ...],
+  "weaknesses": ["<weakness 1>", "<weakness 2>", ...],
+  "skills_table": [
+    {{
+      "requirement": "<JD requirement or skill>",
+      "category": "Must Have" or "Nice To Have",
+      "status": "Covered" or "Partial" or "Missing",
+      "recommendation": "<brief recommendation for tailoring, empty string if Covered>"
+    }}
+  ]
+}}
+
+Rules:
+- strengths and weaknesses: 3-5 items each, concise bullet points
+- skills_table: extract ALL identifiable requirements from the JD, classify each
+- category: "Must Have" for core requirements explicitly stated as required; "Nice To Have" for preferred/bonus/optional items
+- status: "Covered" if CV clearly demonstrates the skill/experience, "Partial" if related but not exact match, "Missing" if not evidenced in CV
+- match_percentage: realistic assessment weighing Must Have coverage more heavily
+- recommendation: actionable suggestion for how tailoring could address the gap; empty string if fully Covered
+- Return ONLY valid JSON, no markdown fences""",
+
     "prompt_anonymize": """Act as a CV writer. Convert company names to generic industry descriptions (e.g., 'Large FinTech Company', 'Global E-commerce Enterprise'). Return JSON: {"Original": "Description"}.\nCompanies: {companies_json}""",
 
     "prompt_refine": """You are an Expert CV Refinement Specialist performing a SURGICAL second pass on an already-tailored CV.
