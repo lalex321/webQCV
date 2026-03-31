@@ -443,7 +443,7 @@ MANDATORY TAILORING ACTIONS (you MUST do ALL of these):
 
 2. **REWRITE SUMMARY (MANDATORY):** You MUST rewrite cv.summary.bullet_points from scratch. Create 4-6 bullet points that directly connect the candidate's real experience to JD requirements. Use JD keywords naturally. Each bullet should address a specific JD requirement using the candidate's actual background. Do NOT copy the original summary unchanged.
 
-3. **REORDER SKILLS (MANDATORY):** Move skill categories and items most relevant to the JD to the TOP. If the JD mentions AWS and the candidate has AWS buried in a list — move it to position #1. Merge small or redundant skill categories. Do NOT create a generic catch-all category like "Tools & Technologies" that duplicates items already listed in other skill groups.
+3. **REORDER SKILLS (MANDATORY):** Move skill categories and items most relevant to the JD to the TOP. If the JD mentions AWS and the candidate has AWS buried in a list — move it to position #1. Merge small or redundant skill categories. Do NOT create a generic catch-all category like "Tools & Technologies" that duplicates items already listed in other skill groups. NEVER create empty skill categories — if the candidate has no skills for a JD-required area, simply omit that category.
 
 4. **REORDER & REPHRASE HIGHLIGHTS (MANDATORY):** For EACH role:
    - Put JD-relevant highlights FIRST.
