@@ -34,10 +34,6 @@ def validate_jd(jd_text: str) -> str | None:
     words = text.split()
     if len(words) < 5:
         return f"Job Description has only {len(words)} words. Please provide a more detailed JD."
-    text_lower = text.lower()
-    hits = sum(1 for m in _JD_MARKERS if m in text_lower)
-    if hits < 2:
-        return "This doesn't look like a Job Description. Please paste an actual JD with role requirements."
     return None
 
 from google import genai
