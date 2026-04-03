@@ -287,6 +287,21 @@ def _mime_type_for_source(source_path: Path | str) -> str:
     raise ValueError(f"Unsupported image file: {source_path.name}")
 
 
+def _retry_on_rate_limit(fn, max_retries=5):
+    """Retry a callable on 429 / RESOURCE_EXHAUSTED with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            err = str(e)
+            if ("429" in err or "Resource" in err or "Quota" in err) and attempt < max_retries - 1:
+                delay = [5, 5, 5, 10, 10][attempt]
+                print(f"⚠️ API rate limit. Sleeping {delay}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                raise
+
+
 def call_llm_json_for_uploaded_file(prompt: str, model_name: str, source_path: Path | str):
     source_path = Path(source_path)
     client = genai.Client(api_key=_gemini_api_key)
@@ -304,7 +319,9 @@ def call_llm_json_for_uploaded_file(prompt: str, model_name: str, source_path: P
     if state_name and state_name != "ACTIVE":
         raise RuntimeError(f"Uploaded file is not ready: {state_name}")
 
-    response = client.models.generate_content(model=model_name, contents=[uploaded, prompt])
+    response = _retry_on_rate_limit(
+        lambda: client.models.generate_content(model=model_name, contents=[uploaded, prompt])
+    )
     txt = getattr(response, "text", None)
     if not txt:
         raise RuntimeError("Model returned empty response")
@@ -584,7 +601,9 @@ def choose_model_name(config: dict) -> str:
 
 def call_llm_json(prompt: str, model_name: str):
     client = genai.Client(api_key=_gemini_api_key)
-    response = client.models.generate_content(model=model_name, contents=prompt)
+    response = _retry_on_rate_limit(
+        lambda: client.models.generate_content(model=model_name, contents=prompt)
+    )
     txt = getattr(response, "text", None)
     if not txt:
         raise RuntimeError("Model returned empty response")
@@ -603,7 +622,8 @@ class QCVWebEngine:
     def __init__(self, templates_dir: str | Path) -> None:
         self.templates_dir = Path(templates_dir)
         self.app_dir = self.templates_dir.parent
-        self.cache_dir = self.app_dir / "_cache"
+        self.data_dir = Path(os.environ.get("DATA_DIR", str(self.app_dir)))
+        self.cache_dir = self.data_dir / "_cache"
         self.config = core.load_config()
         self.model_name = choose_model_name(self.config)
         self.last_content_details = None

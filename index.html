@@ -2411,10 +2411,12 @@
 
     function pollBatchJobs(jobIds, autoDownload) {
       var remaining = new Set(jobIds);
-      var done = 0, failed = 0, total = jobIds.length;
+      var done = 0, failed = 0, total = jobIds.length, polling = false;
       batchBtns.generate.disabled = true;
       batchBtns.generate.textContent = "0/" + total + "…";
       var iv = setInterval(async function() {
+        if (polling) return;
+        polling = true;
         for (var jid of Array.from(remaining)) {
           try {
             var r = await fetch("/jobs/" + jid);
@@ -2431,6 +2433,7 @@
             }
           } catch(e) {}
         }
+        polling = false;
         batchBtns.generate.textContent = done + "/" + total + "…";
         if (!remaining.size) {
           clearInterval(iv);
@@ -2485,8 +2488,10 @@
 
     function pollBatchImport(jobIds) {
       var remaining = new Set(jobIds);
-      var done = 0, failed = 0, total = jobIds.length;
+      var done = 0, failed = 0, total = jobIds.length, polling = false;
       var iv = setInterval(async function() {
+        if (polling) return;
+        polling = true;
         for (var jid of Array.from(remaining)) {
           try {
             var r = await fetch("/jobs/" + jid);
@@ -2499,6 +2504,7 @@
             }
           } catch(e) {}
         }
+        polling = false;
         if (!remaining.size) {
           clearInterval(iv);
           appLog("Import complete: " + done + " done" + (failed ? ", " + failed + " failed" : "") + " of " + total);

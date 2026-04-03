@@ -22,9 +22,10 @@ from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, 
 import cv_engine as _core
 
 APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(APP_DIR)))
 TEMPLATES_DIR = APP_DIR / "templates"
-STORE_DIR = APP_DIR / "_store"
-USAGE_LOG = APP_DIR / "usage_log.jsonl"
+STORE_DIR = DATA_DIR / "_store"
+USAGE_LOG = DATA_DIR / "usage_log.jsonl"
 
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,6 +34,7 @@ app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
+_JOB_SEMAPHORE = threading.Semaphore(5)  # max 5 concurrent LLM jobs
 
 # Background cleanup: remove finished jobs and their tmp dirs every 10 minutes
 _JOB_MAX_AGE_SEC = 3600  # 1 hour
@@ -552,6 +554,8 @@ def _load_store_cv(store_id: str) -> dict | None:
 
 
 def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None) -> None:
+    jobs.update(job_id, status="Queued", progress=0)
+    _JOB_SEMAPHORE.acquire()
     try:
         def cb(status: str, progress: int) -> None:
             jobs.update(job_id, status=status, progress=progress)
@@ -691,6 +695,8 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "duration_sec": round(time.time() - started_at, 2),
             "error": str(e),
         })
+    finally:
+        _JOB_SEMAPHORE.release()
 
 
 @app.post("/jobs")
