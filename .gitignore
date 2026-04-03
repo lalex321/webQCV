@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 _cache/
+_store/
 backup/
 usage_log.jsonl
 .api_key

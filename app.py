@@ -23,9 +23,11 @@ import cv_engine as _core
 
 APP_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = APP_DIR / "templates"
+STORE_DIR = APP_DIR / "_store"
 USAGE_LOG = APP_DIR / "usage_log.jsonl"
 
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
@@ -221,6 +223,114 @@ def admin_usage():
     return HTMLResponse(html)
 
 
+@app.get("/admin/prompts")
+def get_prompts():
+    cfg = _core.load_config()
+    prompts = {k: cfg[k] for k in cfg if k.startswith("prompt_")}
+    defaults = dict(_core.DEFAULT_PROMPTS)
+    return {"prompts": prompts, "defaults": defaults}
+
+
+@app.put("/admin/prompts/{key}")
+async def save_prompt(key: str, request: Request):
+    if not key.startswith("prompt_"):
+        raise HTTPException(status_code=400, detail="Invalid prompt key")
+    body = await request.json()
+    cfg = _core.load_config()
+    cfg[key] = body["text"]
+    _core.save_config(cfg)
+    return {"ok": True}
+
+
+@app.delete("/admin/prompts/{key}")
+def reset_prompt(key: str):
+    if key not in _core.DEFAULT_PROMPTS:
+        raise HTTPException(status_code=404, detail="Unknown prompt key")
+    cfg = _core.load_config()
+    cfg[key] = _core.DEFAULT_PROMPTS[key]
+    _core.save_config(cfg)
+    return {"ok": True, "text": cfg[key]}
+
+
+## ── Store endpoints (Batch tab) ──────────────────────────────────────
+
+@app.get("/store")
+def list_store():
+    return {"items": _list_store()}
+
+
+@app.delete("/store/{store_id}")
+def delete_store_item(store_id: str):
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    p.unlink()
+    return {"ok": True}
+
+
+@app.post("/store/batch")
+async def batch_store_action(request: Request):
+    body = await request.json()
+    action = body.get("action")
+    ids = body.get("ids", [])
+    template_name = body.get("template_name", "")
+    jd_text = body.get("jd_text", "")
+    anonymize = body.get("anonymize", False)
+
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+
+    if action == "delete":
+        deleted = 0
+        for sid in ids:
+            p = STORE_DIR / f"{sid}.json"
+            if p.exists():
+                p.unlink()
+                deleted += 1
+        return {"ok": True, "deleted": deleted}
+
+    if action not in ("generate", "anonymize", "tailor"):
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+
+    if action == "tailor" and not jd_text.strip():
+        raise HTTPException(status_code=400, detail="JD text is required for tailoring")
+
+    if not template_name:
+        tpls = sorted(TEMPLATES_DIR.glob("*.docx"))
+        template_name = tpls[0].name if tpls else ""
+    if not (TEMPLATES_DIR / template_name).exists():
+        raise HTTPException(status_code=400, detail=f"Unknown template: {template_name}")
+
+    client_ip = request.client.host if request.client else "unknown"
+    created_jobs = []
+
+    for sid in ids:
+        cv_json = _load_store_cv(sid)
+        if not cv_json:
+            continue
+        workdir = make_temp_workspace()
+        # Write a dummy source so the pipeline has a path
+        dummy = workdir / "batch_cv.json"
+        dummy.write_text(json.dumps(cv_json, ensure_ascii=False), encoding="utf-8")
+
+        do_anon = anonymize or (action == "anonymize")
+        do_tailor = action == "tailor"
+
+        job = jobs.create(f"batch_{sid[:8]}.json", anonymize=do_anon, autofix=False, template_name=template_name)
+        started_at = time.time()
+
+        thread = threading.Thread(
+            target=_run_job,
+            args=(job.job_id, dummy, workdir, do_anon, False, do_tailor, jd_text, False, template_name, None, client_ip, started_at, True),
+            kwargs={"preloaded_data": cv_json},
+            daemon=True,
+        )
+        thread.start()
+        created_jobs.append({"store_id": sid, "job_id": job.job_id})
+
+    return {"ok": True, "jobs": created_jobs}
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page():
     cfg = _core.load_config()
@@ -366,6 +476,51 @@ def _build_processing_details(
     return details
 
 
+## ── CV Store helpers ─────────────────────────────────────────────────
+
+def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
+    """Persist extracted CV JSON with metadata to _store/."""
+    basics = cv_json.get("basics", {})
+    exp = cv_json.get("experience", [])
+    meta = {
+        "id": store_id,
+        "name": basics.get("name", ""),
+        "role": basics.get("current_title", ""),
+        "company": exp[0].get("company_name", "") if exp else "",
+        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "source_filename": source_filename,
+    }
+    data = {"_meta": meta, **{k: v for k, v in cv_json.items() if k != "_meta"}}
+    (STORE_DIR / f"{store_id}.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _list_store() -> list[dict]:
+    """Return list of _meta dicts for all stored CVs."""
+    items = []
+    for p in STORE_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            meta = data.get("_meta", {})
+            meta["id"] = p.stem
+            items.append(meta)
+        except Exception:
+            continue
+    items.sort(key=lambda m: m.get("date", ""), reverse=True)
+    return items
+
+
+def _load_store_cv(store_id: str) -> dict | None:
+    """Load a stored CV JSON, stripping _meta."""
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        return None
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data.pop("_meta", None)
+    return data
+
+
 def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None) -> None:
     try:
         def cb(status: str, progress: int) -> None:
@@ -377,6 +532,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         # Create pause event for gap analysis (tailor jobs only, unless skip_gap)
         pause_event = None
         gap_ready_cb = None
+        focus_skills_cb = None
         if tailor and jd_text.strip() and not skip_gap:
             pause_event = threading.Event()
 
@@ -413,7 +569,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             debug_cb=dbg,
             pause_event=pause_event,
             gap_ready_cb=gap_ready_cb,
-            focus_skills_cb=focus_skills_cb if (pause_event or skip_gap) else None,
+            focus_skills_cb=focus_skills_cb,
             preloaded_data=preloaded_data,
         )
 
@@ -442,6 +598,19 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 setattr(job, "_source_name", source_path.name)
 
         jobs.update(job_id, status="Done", progress=100, result_path=str(result_path))
+
+        # Auto-save base CV JSON to persistent store
+        try:
+            if base_json:
+                sid = source_key or hashlib.sha256(
+                    json.dumps(base_json, sort_keys=True).encode()
+                ).hexdigest()
+                # Skip if already in store (avoids batch duplicates)
+                if not (STORE_DIR / f"{sid}.json").exists():
+                    _save_to_store(sid, base_json, source_path.name)
+        except Exception:
+            pass  # never break the main job
+
         append_usage({
             "event": "done",
             "job_id": job_id,
