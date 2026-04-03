@@ -124,6 +124,10 @@
     .batch-job-row .done{color:#16a34a}
     .batch-job-row .working{color:var(--primary)}
     .batch-job-row .failed{color:#dc2626}
+    .badge-tailored{display:inline-block;font-size:9px;font-weight:700;background:#e0e7ff;color:#4338ca;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;cursor:pointer}
+    .badge-tailored:hover{background:#c7d2fe}
+    .batch-table tr.clickable{cursor:pointer}
+    .batch-table tr.clickable:hover{background:rgba(99,102,241,.08)}
     .shell{
       display:grid;
       grid-template-columns:1.0fr 1.0fr;
@@ -508,7 +512,7 @@
         <button class="page-tab-btn active" data-pane="paneConvert">Convert</button>
         <button class="page-tab-btn" data-pane="panePrompt">Prompt</button>
         <button class="page-tab-btn" data-pane="paneBatch">Batch</button>
-        <button class="page-tab-btn" data-pane="paneSettings">Settings</button>
+        <button class="page-tab-btn" data-pane="paneLogs">Logs</button>
       </div>
       <div class="page-tab-content">
       <div class="page-pane" id="paneConvert">
@@ -653,14 +657,9 @@
         <div class="batch-toolbar">
           <input id="batchSearch" class="batch-search" type="text" placeholder="Search by name, role, company…" />
           <select id="batchTemplate" class="prompt-select" style="margin-bottom:0"></select>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:#475569"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
           <button id="batchGenerate" class="batch-btn" disabled>Generate</button>
-          <button id="batchAnonymize" class="batch-btn" disabled>Anonymize</button>
-          <button id="batchTailor" class="batch-btn" disabled>Tailor</button>
           <button id="batchDelete" class="batch-btn danger" disabled>Delete</button>
-        </div>
-        <div id="batchJdField" class="hidden" style="margin-bottom:10px">
-          <textarea id="batchJdText" class="batch-jd" placeholder="Paste Job Description for batch tailoring…"></textarea>
-          <button id="batchTailorGo" class="batch-btn" style="margin-bottom:6px">Start Tailoring</button>
         </div>
         <table class="batch-table" id="batchTable">
           <thead>
@@ -682,9 +681,14 @@
       </div>
     </div>
 
-    <div class="page-pane hidden" id="paneSettings">
-      <div style="padding:18px 24px;color:#94a3b8;font-size:14px">
-        Settings — coming soon
+    <div class="page-pane hidden" id="paneLogs">
+      <div style="padding:12px 24px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <strong style="font-size:13px">Logs</strong>
+          <button id="logsClear" class="batch-btn" style="font-size:11px;padding:2px 10px">Clear</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#64748b;margin-left:auto"><input id="logsAutoScroll" type="checkbox" checked /> Auto-scroll</label>
+        </div>
+        <pre id="logsContent" style="background:#1e293b;color:#e2e8f0;border-radius:8px;padding:12px;font-size:11px;line-height:1.5;max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0"></pre>
       </div>
     </div>
 
@@ -1816,7 +1820,8 @@
     });
 
     async function proceedWithTailoring() {
-      if (!activeJobId) return;
+      if (!activeJobId) { appLog("proceedWithTailoring: no activeJobId", "warn"); return; }
+      appLog("Continuing tailoring for job " + activeJobId);
       await saveCvEdits();
       generateBtn.disabled = true;
       generateBtn.textContent = "Generating...";
@@ -1869,6 +1874,7 @@
         // Gap analysis ready — show analysis panel, pause polling
         if (data.status === "gap_analysis_ready" && data.gap_analysis) {
           stopPolling();
+          appLog("Gap analysis ready: " + (data.gap_analysis.match_percentage || 0) + "% match");
           if (preloadedFitJson) {
             renderGapAnalysis(preloadedFitJson.gap_analysis || data.gap_analysis, preloadedFitJson.user_edits);
             preloadedFitJson = null;
@@ -1880,6 +1886,7 @@
 
         if (data.ready) {
           stopPolling();
+          appLog("Job done: " + jobId);
           setPrimaryAction("done", `/jobs/${jobId}/download`);
           loadCvEditor();
           return;
@@ -1887,6 +1894,7 @@
 
         if (data.status === "Failed") {
           stopPolling();
+          appLog("Job failed: " + (data.error || "unknown"), "error");
           setPrimaryAction("failed");
         }
 
@@ -2055,6 +2063,7 @@
       e.preventDefault();
 
       // If gap analysis is ready from a live paused job and options haven't changed — use /continue
+      appLog("Submit: gapReady=" + gapAnalysisReady + " jobId=" + (activeJobId||"none") + " optChanged=" + optionsChangedSinceJob);
       if (gapAnalysisReady && activeJobId && !optionsChangedSinceJob) {
         proceedWithTailoring();
         return;
@@ -2108,6 +2117,7 @@
         activeJobId = data.job_id;
         jobRefined = false;
         optionsChangedSinceJob = false;
+        appLog("Job created: " + data.job_id + " tailor=" + tailorInput.checked + " anon=" + anonymizeInput.checked);
         detailsPayload = data.details || detailsPayload;
         setStatus(data.status, data.progress, "");
         pollTimer = setInterval(() => pollJob(activeJobId), 1500);
@@ -2207,11 +2217,9 @@
     const batchTemplate = document.getElementById("batchTemplate");
     const batchJobsPanel = document.getElementById("batchJobsPanel");
     const batchJobsList = document.getElementById("batchJobsList");
-    const batchJdField = document.getElementById("batchJdField");
+    const batchAnonCheck = document.getElementById("batchAnonymize");
     const batchBtns = {
       generate: document.getElementById("batchGenerate"),
-      anonymize: document.getElementById("batchAnonymize"),
-      tailor: document.getElementById("batchTailor"),
       del: document.getElementById("batchDelete"),
     };
 
@@ -2222,8 +2230,6 @@
     function updateBatchBtns() {
       var n = batchSelected().length;
       batchBtns.generate.disabled = !n;
-      batchBtns.anonymize.disabled = !n;
-      batchBtns.tailor.disabled = !n;
       batchBtns.del.disabled = !n;
     }
 
@@ -2253,12 +2259,20 @@
       batchFiltered.forEach(function(m) {
         var tr = document.createElement("tr");
         var dt = m.date ? m.date.substring(0, 10) : "";
+        var badge = m.tailored ? '<span class="badge-tailored" data-store="' + m.id + '">Tailored</span>' : '';
         tr.innerHTML = '<td><input type="checkbox" data-id="' + m.id + '" /></td>'
-          + '<td>' + esc(m.name) + '</td>'
+          + '<td>' + esc(m.name) + badge + '</td>'
           + '<td>' + esc(m.role) + '</td>'
           + '<td>' + esc(m.company) + '</td>'
           + '<td>' + esc(dt) + '</td>';
         tr.querySelector("input").addEventListener("change", updateBatchBtns);
+        if (m.tailored) {
+          tr.classList.add("clickable");
+          tr.addEventListener("click", function(e) {
+            if (e.target.tagName === "INPUT") return; // don't trigger on checkbox
+            openStoredTailorSession(m.id);
+          });
+        }
         batchBody.appendChild(tr);
       });
       batchSelectAll.checked = false;
@@ -2353,6 +2367,7 @@
     async function batchAction(action, extra) {
       var ids = batchSelected();
       if (!ids.length) return;
+      appLog("Batch " + action + ": " + ids.length + " CV(s)");
       var payload = { action: action, ids: ids, template_name: batchTemplate.value };
       if (extra) Object.assign(payload, extra);
       if (action === "delete") {
@@ -2405,18 +2420,82 @@
       }, 1500);
     }
 
-    batchBtns.generate.addEventListener("click", function() { batchAction("generate"); });
-    batchBtns.anonymize.addEventListener("click", function() { batchAction("anonymize", { anonymize: true }); });
-    batchBtns.tailor.addEventListener("click", function() {
-      batchJdField.classList.toggle("hidden");
-    });
-    document.getElementById("batchTailorGo").addEventListener("click", function() {
-      var jd = document.getElementById("batchJdText").value.trim();
-      if (!jd) { alert("Please paste a Job Description first."); return; }
-      batchJdField.classList.add("hidden");
-      batchAction("tailor", { jd_text: jd });
-    });
+    batchBtns.generate.addEventListener("click", function() { batchAction("generate", { anonymize: batchAnonCheck.checked }); });
     batchBtns.del.addEventListener("click", function() { batchAction("delete"); });
+
+    async function openStoredTailorSession(storeId) {
+      appLog("Opening stored tailor session: " + storeId.substring(0, 8));
+      try {
+        var r = await fetch("/store/" + storeId);
+        if (!r.ok) { alert("Failed to load stored CV"); return; }
+        var data = await r.json();
+        var session = data._tailor_session;
+        if (!session) { alert("No tailoring data for this CV"); return; }
+
+        // Build CV JSON (strip _meta and _tailor_session)
+        var cv = {};
+        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
+
+        // Switch to Convert tab
+        document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
+        document.querySelectorAll(".page-pane").forEach(function(p) { p.classList.add("hidden"); });
+        document.querySelector('[data-pane="paneConvert"]').classList.add("active");
+        document.getElementById("paneConvert").classList.remove("hidden");
+
+        // Enable tailor mode and fill JD
+        tailorInput.checked = true;
+        jdField.classList.remove("hidden");
+        document.getElementById("pageRoot").classList.add("tailor-mode");
+        jdText.value = session.jd_text || "";
+        savePrefs();
+
+        // Set up preloaded state so form submit sends JSON with skip_gap
+        var savedEdits = { checked_skills: session.focus_skills || [] };
+        preloadedFitJson = { gap_analysis: session.gap_analysis, user_edits: savedEdits };
+
+        // Render gap analysis
+        renderGapAnalysis(session.gap_analysis, savedEdits);
+
+        // Load CV into editor
+        cvData = cv;
+        cvDataOrig = JSON.parse(JSON.stringify(cv));
+        cvDirty = false;
+        cvEditorPanel.classList.remove("hidden");
+        renderCvTab("basics");
+        updateBtnLabel();
+        updateSaveBtn();
+
+        // Create a synthetic JSON file for form submission
+        var jsonWithFit = Object.assign({}, cv, {
+          _fit_session: {
+            jd_text: session.jd_text,
+            gap_analysis: session.gap_analysis,
+            user_edits: savedEdits,
+          }
+        });
+        var blob = new Blob([JSON.stringify(jsonWithFit)], { type: "application/json" });
+        var dt = new DataTransfer();
+        dt.items.add(new File([blob], (data._meta.name || "CV").replace(/\s+/g, "_") + "_fit.json", { type: "application/json" }));
+        fileInput.files = dt.files;
+
+      } catch (e) {
+        alert("Error: " + e.message);
+      }
+    }
+
+    /* ── Logs tab ── */
+    const logsContent = document.getElementById("logsContent");
+    const logsAutoScroll = document.getElementById("logsAutoScroll");
+    document.getElementById("logsClear").addEventListener("click", function() { logsContent.textContent = ""; });
+
+    function appLog(msg, level) {
+      level = level || "info";
+      var ts = new Date().toLocaleTimeString();
+      var prefix = level === "error" ? "❌ " : level === "warn" ? "⚠️ " : "";
+      var line = "[" + ts + "] " + prefix + msg + "\n";
+      logsContent.textContent += line;
+      if (logsAutoScroll.checked) logsContent.scrollTop = logsContent.scrollHeight;
+    }
 
     /* ── Resizable page width ── */
     (function() {

@@ -259,6 +259,16 @@ def list_store():
     return {"items": _list_store()}
 
 
+@app.get("/store/{store_id}")
+def get_store_item(store_id: str):
+    """Return full stored CV including tailor session if present."""
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return data
+
+
 @app.delete("/store/{store_id}")
 def delete_store_item(store_id: str):
     p = STORE_DIR / f"{store_id}.json"
@@ -496,6 +506,26 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
     )
 
 
+def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
+                         gap_analysis: dict, focus_skills: list,
+                         keyword_report: dict) -> None:
+    """Update an existing store entry with tailoring session data."""
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        return
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["_tailor_session"] = {
+        "tailored_json": tailored_json,
+        "jd_text": jd_text,
+        "gap_analysis": gap_analysis,
+        "focus_skills": focus_skills,
+        "keyword_report": keyword_report,
+        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    data["_meta"]["tailored"] = True
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _list_store() -> list[dict]:
     """Return list of _meta dicts for all stored CVs."""
     items = []
@@ -543,6 +573,15 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                     setattr(job, "_pause_event", pause_event)
                     if base_json:
                         setattr(job, "_cv_json", base_json)
+                        # Early save to store — CV available before DOCX generation
+                        try:
+                            sid = source_key or hashlib.sha256(
+                                json.dumps(base_json, sort_keys=True).encode()
+                            ).hexdigest()
+                            if not (STORE_DIR / f"{sid}.json").exists():
+                                _save_to_store(sid, base_json, source_path.name)
+                        except Exception:
+                            pass
 
             def focus_skills_cb() -> list:
                 job = jobs.get(job_id)
@@ -605,11 +644,19 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 sid = source_key or hashlib.sha256(
                     json.dumps(base_json, sort_keys=True).encode()
                 ).hexdigest()
-                # Skip if already in store (avoids batch duplicates)
                 if not (STORE_DIR / f"{sid}.json").exists():
                     _save_to_store(sid, base_json, source_path.name)
-        except Exception:
-            pass  # never break the main job
+                # Save tailoring session if tailor was performed
+                if tailor and jd_text.strip():
+                    tailored = getattr(job_engine, "_last_tailored_json", None)
+                    gap = getattr(job, "_gap_analysis", None) if job else None
+                    focus = getattr(job, "_focus_skills", []) if job else []
+                    cd = (getattr(job, "details", None) or {}).get("content_details") or {}
+                    kw_report = cd.get("jd_keyword_report", {})
+                    if tailored:
+                        _update_store_tailor(sid, tailored, jd_text, gap or {}, focus, kw_report)
+        except Exception as exc:
+            import traceback; traceback.print_exc()  # debug store save
 
         append_usage({
             "event": "done",
