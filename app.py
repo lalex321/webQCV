@@ -729,6 +729,7 @@ async def create_job(
     force_tailor: bool = Form(False),
     skip_gap: bool = Form(False),
     focus_skills_json: str = Form(""),
+    import_only: bool = Form(False),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".json"}:
@@ -780,8 +781,8 @@ async def create_job(
 
     source_key = build_source_key(source_path) if suffix != ".json" else None
 
-    # Skip if already in store (batch import dedup)
-    if source_key and not tailor and (STORE_DIR / f"{source_key}.json").exists():
+    # Skip if already in store (batch import dedup only)
+    if import_only and source_key and (STORE_DIR / f"{source_key}.json").exists():
         return {"job_id": "skip", "status": "Done", "progress": 100, "already_in_store": True}
 
     job = jobs.create(

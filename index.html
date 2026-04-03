@@ -2470,6 +2470,7 @@
         fd.append("autofix", "false");
         fd.append("tailor", "false");
         fd.append("jd_text", "");
+        fd.append("import_only", "true");
         try {
           var r = await fetch("/jobs", { method: "POST", body: fd });
           if (!r.ok) { appLog("Import failed: " + f.name, "error"); continue; }
