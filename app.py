@@ -479,7 +479,11 @@ def index():
     index_path = APP_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
-    return index_path.read_text(encoding="utf-8")
+    return RawResponse(
+        content=index_path.read_bytes(),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/stats")
