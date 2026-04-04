@@ -809,12 +809,11 @@ async def create_job(
         # Auto-enable tailor if fit_session has JD
         if fit_session and fit_session.get("jd_text", "").strip():
             tailor = True
-        # Extract focus_skills from fit_session
-        if fit_session:
+        # Extract focus_skills from fit_session (only when frontend requested skip_gap)
+        if fit_session and skip_gap:
             user_edits = fit_session.get("user_edits", {})
             if not focus_skills_json and user_edits.get("checked_skills"):
                 focus_skills_json = json.dumps(user_edits["checked_skills"])
-            skip_gap = True
 
     if tailor and not jd_text.strip():
         raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
