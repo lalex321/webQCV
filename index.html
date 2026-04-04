@@ -2306,9 +2306,12 @@
 
     function batchFilter() {
       var q = batchSearch.value.toLowerCase().trim();
-      batchFiltered = q ? batchData.filter(function(m) {
-        return (m.name + " " + m.role + " " + m.company + " " + (m.source_filename || "") + " " + (m.comments || "")).toLowerCase().indexOf(q) >= 0;
-      }) : batchData.slice();
+      if (!q) { batchFiltered = batchData.slice(); batchSort(); return; }
+      var tokens = q.split(/\s+/);
+      batchFiltered = batchData.filter(function(m) {
+        var txt = m.search_text || (m.name + " " + m.role + " " + m.company).toLowerCase();
+        return tokens.every(function(t) { return txt.indexOf(t) >= 0; });
+      });
       batchSort();
     }
 

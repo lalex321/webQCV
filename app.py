@@ -66,6 +66,33 @@ def _cleanup_loop():
 threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 
+def _backfill_search_text():
+    """One-time migration: add search_text to store entries that lack it."""
+    for p in STORE_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            meta = data.get("_meta", {})
+            if "search_text" in meta:
+                continue
+            basics = data.get("basics", {})
+            exp = data.get("experience", [])
+            skills_text = json.dumps(data.get("skills", {}), ensure_ascii=False).lower()
+            meta["search_text"] = " ".join([
+                basics.get("name", ""),
+                basics.get("current_title", ""),
+                exp[0].get("company_name", "") if exp else "",
+                meta.get("source_filename", ""),
+                meta.get("comments", ""),
+                skills_text,
+            ]).lower()
+            data["_meta"] = meta
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            continue
+
+_backfill_search_text()
+
+
 def append_usage(event: dict) -> None:
     event = dict(event)
     event.setdefault("ts", time.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -554,6 +581,17 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
         else:
             comments = ""
 
+        # Build search index (like desktop Q-CV: name, title, company, skills, filename, comments)
+        skills_text = json.dumps(cv_json.get("skills", {}), ensure_ascii=False).lower()
+        search_text = " ".join([
+            basics.get("name", ""),
+            basics.get("current_title", ""),
+            exp[0].get("company_name", "") if exp else "",
+            source_filename or "",
+            comments,
+            skills_text,
+        ]).lower()
+
         meta = {
             "id": store_id,
             "name": basics.get("name", ""),
@@ -562,6 +600,7 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
             "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "source_filename": source_filename,
             "comments": comments,
+            "search_text": search_text,
         }
         data = {"_meta": meta, **{k: v for k, v in cv_json.items() if k != "_meta"}}
         (STORE_DIR / f"{store_id}.json").write_text(
