@@ -744,7 +744,20 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         gap_ready_cb = None
         focus_skills_cb = None
         if tailor and jd_text.strip() and not skip_gap:
-            pause_event = threading.Event()
+            _raw_pause = threading.Event()
+            class _SemaphorePause:
+                """Wrapper that releases semaphore while waiting for user."""
+                def wait(self, timeout=None):
+                    _JOB_SEMAPHORE.release()
+                    try:
+                        return _raw_pause.wait(timeout=timeout)
+                    finally:
+                        _JOB_SEMAPHORE.acquire()
+                def set(self):
+                    _raw_pause.set()
+                def is_set(self):
+                    return _raw_pause.is_set()
+            pause_event = _SemaphorePause()
 
             def gap_ready_cb(gap_result: dict, base_json: dict = None) -> None:
                 job = jobs.get(job_id)
