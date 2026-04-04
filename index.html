@@ -116,7 +116,7 @@
     .statusbar-details{background:none;border:none;color:var(--primary);cursor:pointer;font-size:11px;font-weight:600;padding:0}
     #paneBatch{display:flex;flex-direction:column;overflow:hidden}
     .prompt-editor-area{width:100%;min-height:400px;font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:12px;border:1px solid #a8b5c4;border-radius:10px;resize:vertical;background:#fff}
-    .prompt-select{padding:4px 8px;border:1px solid #a8b5c4;border-radius:6px;font-size:11px;font-weight:600;margin-bottom:0}
+    .prompt-select{padding:3px 8px !important;width:auto !important;border:1px solid #a8b5c4 !important;border-radius:6px !important;font-size:11px !important;font-weight:600;margin-bottom:0}
     .prompt-status{font-size:13px;margin-top:8px;color:#475569}
     /* Batch tab */
     .batch-toolbar{display:flex;align-items:center;gap:6px;margin-bottom:0;padding:8px 0 6px}
@@ -127,7 +127,7 @@
     .batch-btn.danger{color:#dc2626}
     .batch-btn.danger:hover:not(:disabled){background:#fef2f2;border-color:#dc2626}
     .batch-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
-    .batch-table th{text-align:left;padding:6px 10px;border-bottom:2px solid #a8b5c4;font-weight:700;color:#334155;cursor:pointer;user-select:none;font-size:12px;white-space:nowrap;position:sticky;top:0;background:rgba(255,255,255,.97);z-index:4;overflow:hidden}
+    .batch-table th{text-align:left;padding:5px 6px;border-bottom:2px solid #a8b5c4;font-weight:700;color:#334155;cursor:pointer;user-select:none;font-size:12px;white-space:nowrap;position:sticky;top:0;background:rgba(255,255,255,.97);z-index:4;overflow:hidden}
     .col-resize{position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:2}
     .col-resize:hover,.col-resize.active{background:rgba(99,102,241,.25)}
     .draggable-th{cursor:grab}
@@ -142,7 +142,7 @@
     .draggable-th.dragging{opacity:.4}
     .draggable-th.drag-over{border-left:2px solid var(--primary)}
     .batch-table th:hover{color:var(--primary)}
-    .batch-table td{padding:6px 10px;border-bottom:1px solid #d0d7e2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .batch-table td{padding:5px 6px;border-bottom:1px solid #d0d7e2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .batch-table tr:hover{background:rgba(99,102,241,.04)}
     .batch-table .sort-arrow{font-size:10px;margin-left:3px;color:#64748b}
     .batch-empty{padding:40px 0;text-align:center;color:#64748b;font-size:14px}
@@ -685,7 +685,7 @@
           <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
           <select id="batchTemplate" class="prompt-select" style="max-width:130px"></select>
-          <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#475569"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
+          <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#475569;margin:0"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
           <button id="batchGenerate" class="batch-btn" disabled>Generate</button>
           <button id="batchDelete" class="batch-btn danger" disabled>Delete</button>
           <div style="margin-left:auto;position:relative;display:inline-block">
@@ -2361,17 +2361,30 @@
       headRow.appendChild(thCb);
       batchSelectAll = cbInput;
 
-      var savedWidths = JSON.parse(localStorage.getItem("batchColPct") || "{}");
+      var savedWidths = JSON.parse(localStorage.getItem("batchColPx") || "{}");
       var table = document.getElementById("batchTable");
+      var containerW = table.parentElement.clientWidth;
+      // Check if saved pixel widths fit the container; if not, fall back to %
+      var visCols = getVisibleCols();
+      var savedTotal = 30; // checkbox column
+      var hasSaved = false;
+      visCols.forEach(function(col) {
+        if (savedWidths[col.key]) { savedTotal += savedWidths[col.key]; hasSaved = true; }
+      });
+      var useSaved = hasSaved && savedTotal <= containerW;
 
-      getVisibleCols().forEach(function(col, idx) {
+      visCols.forEach(function(col, idx) {
         var th = document.createElement("th");
         th.dataset.sort = col.key;
         th.textContent = col.label;
         if (col.tooltip) th.title = col.tooltip;
         th.draggable = true;
         th.classList.add("draggable-th");
-        th.style.width = (savedWidths[idx + 1] || col.width || 14) + "%";
+        if (useSaved && savedWidths[col.key]) {
+          th.style.width = savedWidths[col.key] + "px";
+        } else {
+          th.style.width = (col.width || 14) + "%";
+        }
 
         // Sort click
         th.addEventListener("click", function(e) {
@@ -2416,25 +2429,52 @@
         grip.draggable = false;
         grip.addEventListener("dragstart", function(e) { e.preventDefault(); });
         th.appendChild(grip);
+        function saveBatchColWidths() {
+          var ws = {};
+          var ths = headRow.querySelectorAll("th[data-sort]");
+          ths.forEach(function(t) { ws[t.dataset.sort] = t.offsetWidth; });
+          localStorage.setItem("batchColPx", JSON.stringify(ws));
+        }
+        // Double-click: auto-fit column to content
+        grip.addEventListener("dblclick", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var colIdx = Array.prototype.indexOf.call(headRow.children, th);
+          var rows = document.querySelectorAll("#batchBody tr");
+          var measure = document.createElement("span");
+          measure.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;font-size:13px;font-family:inherit;padding:0 20px";
+          document.body.appendChild(measure);
+          // measure header
+          measure.textContent = th.textContent;
+          var maxW = measure.offsetWidth;
+          rows.forEach(function(row) {
+            var cell = row.children[colIdx];
+            if (!cell) return;
+            measure.innerHTML = cell.innerHTML;
+            if (measure.offsetWidth > maxW) maxW = measure.offsetWidth;
+          });
+          document.body.removeChild(measure);
+          th.style.width = Math.max(40, maxW) + "px";
+          saveBatchColWidths();
+        });
+        // Drag resize: only this column, pixel-based
         grip.addEventListener("mousedown", function(e) {
           e.preventDefault();
           e.stopPropagation();
           grip.classList.add("active");
           var startX = e.clientX;
           var startW = th.offsetWidth;
-          var tableW = table.offsetWidth;
+          document.body.style.userSelect = "none";
           function onMove(e2) {
-            var w = Math.max(30, startW + e2.clientX - startX);
-            th.style.width = (w / tableW * 100) + "%";
+            var w = Math.max(40, startW + e2.clientX - startX);
+            th.style.width = w + "px";
           }
           function onUp() {
             grip.classList.remove("active");
+            document.body.style.userSelect = "";
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", onUp);
-            var tw = table.offsetWidth;
-            var pcts = {};
-            headRow.querySelectorAll("th").forEach(function(t, j) { pcts[j] = +(t.offsetWidth / tw * 100).toFixed(2); });
-            localStorage.setItem("batchColPct", JSON.stringify(pcts));
+            saveBatchColWidths();
           }
           document.addEventListener("mousemove", onMove);
           document.addEventListener("mouseup", onUp);
