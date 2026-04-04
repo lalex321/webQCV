@@ -113,6 +113,9 @@
     .batch-table th{text-align:left;padding:6px 10px;border-bottom:2px solid #c8d3e0;font-weight:700;color:#475569;cursor:pointer;user-select:none;font-size:12px;white-space:nowrap;position:sticky;top:0;background:rgba(255,255,255,.97);z-index:4;overflow:hidden}
     .col-resize{position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:2}
     .col-resize:hover,.col-resize.active{background:rgba(99,102,241,.25)}
+    .draggable-th{cursor:grab}
+    .draggable-th.dragging{opacity:.4}
+    .draggable-th.drag-over{border-left:2px solid var(--primary)}
     .batch-table th:hover{color:var(--primary)}
     .batch-table td{padding:6px 10px;border-bottom:1px solid #e8ecf1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .batch-table tr:hover{background:rgba(99,102,241,.04)}
@@ -127,6 +130,8 @@
     .batch-job-row .failed{color:#dc2626}
     .badge-tailored{display:inline-block;font-size:9px;font-weight:700;background:#e0e7ff;color:#4338ca;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;cursor:pointer}
     .badge-tailored:hover{background:#c7d2fe}
+    .badge-analyzed{display:inline-block;font-size:9px;font-weight:700;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;cursor:pointer}
+    .badge-analyzed:hover{background:#fde68a}
     .batch-table tr.clickable{cursor:pointer}
     .batch-table tr.clickable:hover{background:rgba(99,102,241,.08)}
     .shell{
@@ -668,15 +673,7 @@
       </div>
       <div style="flex:1;overflow:auto;padding:0 24px 18px">
         <table class="batch-table" id="batchTable">
-          <thead>
-            <tr>
-              <th style="width:30px"><input id="batchSelectAll" type="checkbox" /></th>
-              <th data-sort="name">Name</th>
-              <th data-sort="role">Role</th>
-              <th data-sort="company">Company</th>
-              <th data-sort="date">Date</th>
-            </tr>
-          </thead>
+          <thead id="batchHead"><tr></tr></thead>
           <tbody id="batchBody"></tbody>
         </table>
         <div id="batchEmpty" class="batch-empty">No stored CVs yet. Convert a CV on the Convert tab first.</div>
@@ -783,6 +780,7 @@
     let jobRefined = false;
     let lastAnalyzedJd = "";
     let lastSubmittedFile = null;
+    let currentStoreId = null;
     let detailsLines = [];
     let detailsPayload = null;
     let pollTimer = null;
@@ -997,7 +995,11 @@
 
     function updateBtnLabel() {
       if (!generateBtn.disabled) {
-        generateBtn.textContent = tailorInput.checked ? "Analyze" : "Convert";
+        if (gapAnalysisReady && tailorInput.checked) {
+          generateBtn.textContent = "Generate Tailored CV";
+        } else {
+          generateBtn.textContent = tailorInput.checked ? "Analyze" : "Convert";
+        }
       }
     }
 
@@ -1060,6 +1062,7 @@
       gapAnalysisReady = false;
       hasGapData = false;
       currentGapData = null;
+      preloadedFitJson = null;
       optionsChangedSinceJob = false;
       cvEditorPanel.classList.add("hidden");
       cvEditorPanel.classList.remove("open");
@@ -1131,6 +1134,8 @@
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate Tailored CV";
       generateBtn.classList.remove("hidden");
+      topDownloadLink.classList.add("hidden");
+      topDownloadLink.removeAttribute("href");
       // Load CV editor
       loadCvEditor();
     }
@@ -1922,6 +1927,7 @@
             formData.append("tailor", "true");
             formData.append("jd_text", jdText.value.trim());
             formData.append("force_tailor", "true");
+            if (currentStoreId) formData.append("store_id", currentStoreId);
             try {
               const r = await fetch("/jobs", { method: "POST", body: formData });
               const d = await r.json();
@@ -2041,7 +2047,9 @@
     warnJsonInput.addEventListener("change", () => { savePrefs(); });
     templateSelect.addEventListener("change", () => {
       savePrefs();
-      resetForNewInput();
+      if (hasGapData) {
+        optionsChangedSinceJob = true;
+      }
     });
     /* Preserve previously selected file if user cancels file picker */
     let lastSelectedFile = null;
@@ -2049,6 +2057,7 @@
       if (fileInput.files.length) {
         lastSelectedFile = fileInput.files[0];
         preloadedFitJson = null;
+        currentStoreId = null;
         resetForNewInput();
         /* If JSON file — parse and auto-fill */
         const ext = lastSelectedFile.name.split(".").pop().toLowerCase();
@@ -2103,6 +2112,7 @@
       formData.append("tailor", tailorInput.checked ? "true" : "false");
       formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
+      if (currentStoreId) formData.append("store_id", currentStoreId);
       /* Skip gap analysis if we already have gap data (preloaded JSON or options changed after gap) */
       if (hasGapData && tailorInput.checked && (preloadedFitJson || optionsChangedSinceJob)) {
         const fs = [];
@@ -2213,10 +2223,29 @@
     });
 
     /* ── Batch Tab ── */
+    const BATCH_COLS_DEFAULT = [
+      { key: "name", label: "Name" },
+      { key: "match_pct", label: "Match" },
+      { key: "role", label: "Role" },
+      { key: "company", label: "Company" },
+      { key: "date", label: "Date", tooltip: "Last updated" },
+    ];
+    var batchCols = (function() {
+      try {
+        var saved = JSON.parse(localStorage.getItem("batchColOrder"));
+        if (saved && saved.length === BATCH_COLS_DEFAULT.length) {
+          // Validate all keys present
+          var keys = BATCH_COLS_DEFAULT.map(function(c) { return c.key; });
+          if (saved.every(function(c) { return keys.indexOf(c.key) >= 0; })) return saved;
+        }
+      } catch(e) {}
+      return BATCH_COLS_DEFAULT.slice();
+    })();
+
     let batchData = [], batchFiltered = [], batchSortCol = "date", batchSortAsc = false, batchLoaded = false, batchLastChecked = null;
     const batchBody = document.getElementById("batchBody");
     const batchEmpty = document.getElementById("batchEmpty");
-    const batchSelectAll = document.getElementById("batchSelectAll");
+    var batchSelectAll; // initialized in renderBatchHead
     const batchSearch = document.getElementById("batchSearch");
     const batchTemplate = document.getElementById("batchTemplate");
     const batchAnonCheck = document.getElementById("batchAnonymize");
@@ -2246,12 +2275,139 @@
     function batchSort() {
       var col = batchSortCol, asc = batchSortAsc;
       batchFiltered.sort(function(a, b) {
-        var va = (a[col] || "").toLowerCase(), vb = (b[col] || "").toLowerCase();
+        var va = a[col], vb = b[col];
+        if (col === "match_pct") {
+          va = va || 0; vb = vb || 0;
+          return asc ? va - vb : vb - va;
+        }
+        va = (va || "").toLowerCase(); vb = (vb || "").toLowerCase();
         if (va < vb) return asc ? -1 : 1;
         if (va > vb) return asc ? 1 : -1;
         return 0;
       });
       renderBatchTable();
+    }
+
+    function renderBatchHead() {
+      var headRow = document.querySelector("#batchHead tr");
+      headRow.innerHTML = "";
+      // Checkbox column (not draggable)
+      var thCb = document.createElement("th");
+      thCb.style.width = "30px";
+      var cbInput = document.createElement("input");
+      cbInput.type = "checkbox";
+      cbInput.id = "batchSelectAll";
+      thCb.appendChild(cbInput);
+      headRow.appendChild(thCb);
+      batchSelectAll = cbInput;
+      batchSelectAll.addEventListener("change", function() {
+        var checked = batchSelectAll.checked;
+        batchBody.querySelectorAll("input[type=checkbox]").forEach(function(cb) { cb.checked = checked; });
+        updateBatchBtns();
+      });
+
+      var savedWidths = JSON.parse(localStorage.getItem("batchColPct") || "{}");
+      var table = document.getElementById("batchTable");
+
+      batchCols.forEach(function(col, idx) {
+        var th = document.createElement("th");
+        th.dataset.sort = col.key;
+        th.textContent = col.label;
+        if (col.tooltip) th.title = col.tooltip;
+        th.draggable = true;
+        th.classList.add("draggable-th");
+        if (savedWidths[idx + 1]) th.style.width = savedWidths[idx + 1] + "%";
+
+        // Sort click
+        th.addEventListener("click", function(e) {
+          if (e.target.classList.contains("col-resize")) return;
+          if (batchSortCol === col.key) { batchSortAsc = !batchSortAsc; }
+          else { batchSortCol = col.key; batchSortAsc = true; }
+          batchSort();
+        });
+
+        // Drag & drop reorder
+        th.addEventListener("dragstart", function(e) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", String(idx));
+          th.classList.add("dragging");
+        });
+        th.addEventListener("dragend", function() { th.classList.remove("dragging"); });
+        th.addEventListener("dragover", function(e) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          th.classList.add("drag-over");
+        });
+        th.addEventListener("dragleave", function() { th.classList.remove("drag-over"); });
+        th.addEventListener("drop", function(e) {
+          e.preventDefault();
+          th.classList.remove("drag-over");
+          var fromIdx = parseInt(e.dataTransfer.getData("text/plain"));
+          var toIdx = idx;
+          if (fromIdx === toIdx) return;
+          var moved = batchCols.splice(fromIdx, 1)[0];
+          batchCols.splice(toIdx, 0, moved);
+          localStorage.setItem("batchColOrder", JSON.stringify(batchCols));
+          renderBatchHead();
+          renderBatchTable();
+        });
+
+        // Resize grip
+        var grip = document.createElement("div");
+        grip.className = "col-resize";
+        grip.draggable = false;
+        grip.addEventListener("dragstart", function(e) { e.preventDefault(); });
+        th.appendChild(grip);
+        grip.addEventListener("mousedown", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          grip.classList.add("active");
+          var startX = e.clientX;
+          var startW = th.offsetWidth;
+          var tableW = table.offsetWidth;
+          function onMove(e2) {
+            var w = Math.max(30, startW + e2.clientX - startX);
+            th.style.width = (w / tableW * 100) + "%";
+          }
+          function onUp() {
+            grip.classList.remove("active");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            var tw = table.offsetWidth;
+            var pcts = {};
+            headRow.querySelectorAll("th").forEach(function(t, j) { pcts[j] = +(t.offsetWidth / tw * 100).toFixed(2); });
+            localStorage.setItem("batchColPct", JSON.stringify(pcts));
+          }
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+
+        headRow.appendChild(th);
+      });
+
+      // Update sort arrows
+      headRow.querySelectorAll("th[data-sort]").forEach(function(th) {
+        var arrow = th.querySelector(".sort-arrow");
+        if (arrow) arrow.remove();
+        if (th.dataset.sort === batchSortCol) {
+          var sp = document.createElement("span");
+          sp.className = "sort-arrow";
+          sp.textContent = batchSortAsc ? " ▲" : " ▼";
+          th.appendChild(sp);
+        }
+      });
+    }
+    renderBatchHead();
+
+    function cellValue(m, key) {
+      if (key === "match_pct") return m.match_pct ? m.match_pct + "%" : "";
+      if (key === "date") return m.date ? m.date.substring(0, 10) : "";
+      if (key === "name") {
+        var badge = m.tailored ? '<span class="badge-tailored">Tailored</span>'
+          : m.analyzed ? '<span class="badge-analyzed">Analyzed</span>' : '';
+        return esc(m.name) + badge;
+      }
+      return esc(m[key] || "");
     }
 
     function renderBatchTable() {
@@ -2264,13 +2420,9 @@
         : batchFiltered.length + " / " + batchData.length + " CVs";
       batchFiltered.forEach(function(m) {
         var tr = document.createElement("tr");
-        var dt = m.date ? m.date.substring(0, 10) : "";
-        var badge = m.tailored ? '<span class="badge-tailored" data-store="' + m.id + '">Tailored</span>' : '';
-        tr.innerHTML = '<td><input type="checkbox" data-id="' + m.id + '" /></td>'
-          + '<td>' + esc(m.name) + badge + '</td>'
-          + '<td>' + esc(m.role) + '</td>'
-          + '<td>' + esc(m.company) + '</td>'
-          + '<td>' + esc(dt) + '</td>';
+        var cells = '<td><input type="checkbox" data-id="' + m.id + '" /></td>';
+        batchCols.forEach(function(col) { cells += '<td>' + cellValue(m, col.key) + '</td>'; });
+        tr.innerHTML = cells;
         var cb = tr.querySelector("input");
         cb.addEventListener("click", function(e) {
           var allCbs = Array.from(batchBody.querySelectorAll("input[type=checkbox]"));
@@ -2287,7 +2439,7 @@
         tr.classList.add("clickable");
         tr.addEventListener("click", function(e) {
           if (e.target.tagName === "INPUT") return;
-          if (m.tailored) { openStoredTailorSession(m.id); }
+          if (m.tailored || m.analyzed) { openStoredTailorSession(m.id); }
           else { openStoredCv(m.id); }
         });
         batchBody.appendChild(tr);
@@ -2295,7 +2447,7 @@
       batchSelectAll.checked = false;
       updateBatchBtns();
       // Update sort arrows
-      document.querySelectorAll("#batchTable th[data-sort]").forEach(function(th) {
+      document.querySelectorAll("#batchHead th[data-sort]").forEach(function(th) {
         var arrow = th.querySelector(".sort-arrow");
         if (arrow) arrow.remove();
         if (th.dataset.sort === batchSortCol) {
@@ -2330,56 +2482,6 @@
     }
 
     batchSearch.addEventListener("input", batchFilter);
-
-    batchSelectAll.addEventListener("change", function() {
-      var checked = batchSelectAll.checked;
-      batchBody.querySelectorAll("input[type=checkbox]").forEach(function(cb) { cb.checked = checked; });
-      updateBatchBtns();
-    });
-
-    document.querySelectorAll("#batchTable th[data-sort]").forEach(function(th) {
-      th.addEventListener("click", function() {
-        if (batchSortCol === th.dataset.sort) { batchSortAsc = !batchSortAsc; }
-        else { batchSortCol = th.dataset.sort; batchSortAsc = true; }
-        batchSort();
-      });
-    });
-
-    /* ── Column resize for batch table ── */
-    (function() {
-      var table = document.getElementById("batchTable");
-      var ths = document.querySelectorAll("#batchTable th");
-      var savedWidths = JSON.parse(localStorage.getItem("batchColPct") || "{}");
-      ths.forEach(function(th, i) {
-        if (savedWidths[i]) th.style.width = savedWidths[i] + "%";
-        var grip = document.createElement("div");
-        grip.className = "col-resize";
-        th.appendChild(grip);
-        grip.addEventListener("mousedown", function(e) {
-          e.preventDefault();
-          e.stopPropagation();
-          grip.classList.add("active");
-          var startX = e.clientX;
-          var startW = th.offsetWidth;
-          var tableW = table.offsetWidth;
-          function onMove(e2) {
-            var w = Math.max(30, startW + e2.clientX - startX);
-            th.style.width = (w / tableW * 100) + "%";
-          }
-          function onUp() {
-            grip.classList.remove("active");
-            document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
-            var tw = table.offsetWidth;
-            var pcts = {};
-            ths.forEach(function(t, j) { pcts[j] = +(t.offsetWidth / tw * 100).toFixed(2); });
-            localStorage.setItem("batchColPct", JSON.stringify(pcts));
-          }
-          document.addEventListener("mousemove", onMove);
-          document.addEventListener("mouseup", onUp);
-        });
-      });
-    })();
 
     async function batchAction(action, extra) {
       var ids = batchSelected();
@@ -2522,7 +2624,9 @@
 
         // Build CV JSON (strip _meta and _tailor_session)
         var cv = {};
-        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
+        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session" && k !== "_gap_session") cv[k] = data[k]; }
+
+        currentStoreId = storeId;
 
         // Switch to Convert tab and reset state
         document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
@@ -2564,15 +2668,22 @@
     async function openStoredTailorSession(storeId) {
       appLog("Opening stored tailor session: " + storeId.substring(0, 8));
       try {
+        currentStoreId = storeId;
         var r = await fetch("/store/" + storeId);
         if (!r.ok) { alert("Failed to load stored CV"); return; }
         var data = await r.json();
-        var session = data._tailor_session;
+        var session = data._tailor_session || data._gap_session;
         if (!session) { alert("No tailoring data for this CV"); return; }
 
-        // Build CV JSON (strip _meta and _tailor_session)
+        // Best gap_analysis: prefer tailor_session, fallback to gap_session
+        var gapData = session.gap_analysis;
+        if ((!gapData || !gapData.match_percentage) && data._gap_session && data._gap_session.gap_analysis) {
+          gapData = data._gap_session.gap_analysis;
+        }
+
+        // Build CV JSON (strip _meta, _tailor_session, _gap_session)
         var cv = {};
-        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session") cv[k] = data[k]; }
+        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session" && k !== "_gap_session") cv[k] = data[k]; }
 
         // Switch to Convert tab and reset state
         document.querySelectorAll(".page-tab-btn").forEach(function(b) { b.classList.remove("active"); });
@@ -2581,8 +2692,12 @@
         document.getElementById("paneConvert").classList.remove("hidden");
         stopPolling();
         activeJobId = null;
+        gapAnalysisReady = false;
+        hasGapData = false;
+        currentGapData = null;
         errorText.textContent = "";
         statusBox.style.display = "none";
+        setPrimaryAction("idle");
 
         // Enable tailor mode and fill JD
         tailorInput.checked = true;
@@ -2593,10 +2708,10 @@
 
         // Set up preloaded state so form submit sends JSON with skip_gap
         var savedEdits = { checked_skills: session.focus_skills || [] };
-        preloadedFitJson = { gap_analysis: session.gap_analysis, user_edits: savedEdits };
+        preloadedFitJson = { gap_analysis: gapData, user_edits: savedEdits };
 
         // Render gap analysis
-        renderGapAnalysis(session.gap_analysis, savedEdits);
+        renderGapAnalysis(gapData, savedEdits);
 
         // Load CV into editor
         cvData = cv;
@@ -2611,7 +2726,7 @@
         var jsonWithFit = Object.assign({}, cv, {
           _fit_session: {
             jd_text: session.jd_text,
-            gap_analysis: session.gap_analysis,
+            gap_analysis: gapData,
             user_edits: savedEdits,
           }
         });

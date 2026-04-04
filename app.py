@@ -333,7 +333,7 @@ async def batch_store_action(request: Request):
 
         thread = threading.Thread(
             target=_run_job,
-            args=(job.job_id, dummy, workdir, do_anon, False, do_tailor, jd_text, False, template_name, None, client_ip, started_at, True),
+            args=(job.job_id, dummy, workdir, do_anon, False, do_tailor, jd_text, False, template_name, sid, client_ip, started_at, True),
             kwargs={"preloaded_data": cv_json},
             daemon=True,
         )
@@ -526,6 +526,30 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
     )
 
 
+def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: dict = None) -> None:
+    """Save gap analysis to store entry — sets 'analyzed' badge."""
+    pct = gap_analysis.get("match_percentage", 0)
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        name = (base_json or {}).get("basics", {}).get("name", "")
+        p = _find_store_by_name(name)
+        if not p:
+            print(f"[_save_store_gap] NOT FOUND: sid={store_id[:12]}, name={name!r}, pct={pct}")
+            return
+        print(f"[_save_store_gap] fallback by name: {name!r} → {p.stem[:12]}, pct={pct}")
+    else:
+        print(f"[_save_store_gap] direct: sid={store_id[:12]}, pct={pct}")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["_gap_session"] = {
+        "gap_analysis": gap_analysis,
+        "jd_text": jd_text,
+        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    data["_meta"]["analyzed"] = True
+    data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
                          gap_analysis: dict, focus_skills: list,
                          keyword_report: dict) -> None:
@@ -547,6 +571,9 @@ def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
         "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     data["_meta"]["tailored"] = True
+    # Keep gap analysis match_percentage (consistent with Fit Report on Convert tab)
+    if gap_analysis and gap_analysis.get("match_percentage"):
+        data["_meta"]["match_pct"] = int(gap_analysis["match_percentage"])
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -575,7 +602,7 @@ def _load_store_cv(store_id: str) -> dict | None:
     return data
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None) -> None:
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None) -> None:
     jobs.update(job_id, status="Queued", progress=0)
     _JOB_SEMAPHORE.acquire()
     try:
@@ -606,18 +633,26 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                             ).hexdigest()
                             if not (STORE_DIR / f"{sid}.json").exists():
                                 _save_to_store(sid, base_json, source_path.name)
-                        except Exception:
-                            pass
+                            # Save gap analysis immediately (shows "Analyzed" badge)
+                            _save_store_gap(sid, gap_result, jd_text, base_json)
+                        except Exception as exc:
+                            print(f"[gap_ready_cb] store save error: {exc}")
+                            import traceback; traceback.print_exc()
 
             def focus_skills_cb() -> list:
                 job = jobs.get(job_id)
                 return getattr(job, "_focus_skills", []) if job else []
 
-        # skip_gap: pre-fill focus_skills, no pause
+        # skip_gap: pre-fill focus_skills and gap_analysis, no pause
         if skip_gap and tailor:
             _preloaded_fs = preloaded_focus_skills or []
             def focus_skills_cb() -> list:
                 return _preloaded_fs
+            # Preserve gap_analysis from preloaded data so store save can use it
+            if preloaded_gap:
+                job = jobs.get(job_id)
+                if job:
+                    setattr(job, "_gap_analysis", preloaded_gap)
 
         job_engine = QCVWebEngine(TEMPLATES_DIR)
         result_path = job_engine.process(
@@ -734,6 +769,7 @@ async def create_job(
     skip_gap: bool = Form(False),
     focus_skills_json: str = Form(""),
     import_only: bool = Form(False),
+    store_id: str = Form(""),
 ):
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".json"}:
@@ -784,6 +820,9 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Job description is required when tailoring is enabled.")
 
     source_key = build_source_key(source_path) if suffix != ".json" else None
+    # For CVs loaded from store (JSON), use store_id as source_key
+    if not source_key and store_id:
+        source_key = store_id
 
     # Skip if already in store (batch import dedup only)
     if import_only and source_key and (STORE_DIR / f"{source_key}.json").exists():
@@ -827,6 +866,7 @@ async def create_job(
         kwargs={
             "preloaded_focus_skills": json.loads(focus_skills_json) if focus_skills_json else None,
             "preloaded_data": preloaded_data,
+            "preloaded_gap": fit_session.get("gap_analysis") if fit_session else None,
         },
         daemon=True,
     )
