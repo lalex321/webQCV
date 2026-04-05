@@ -766,7 +766,7 @@ def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
         data["_meta"]["tailored"] = True
         data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         # Keep gap analysis match_percentage (consistent with Fit Report on Convert tab)
-        if gap_analysis and gap_analysis.get("match_percentage"):
+        if gap_analysis and "match_percentage" in gap_analysis:
             data["_meta"]["match_pct"] = int(gap_analysis["match_percentage"])
         data["_meta"]["id"] = p.stem
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

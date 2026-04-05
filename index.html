@@ -2841,7 +2841,7 @@
         var visCols = getVisibleCols();
         var matchIdx = -1;
         visCols.forEach(function(col, i) { if (col.key === "match_pct") matchIdx = i; });
-        if (matchIdx >= 0 && meta.match_pct) {
+        if (matchIdx >= 0 && meta.match_pct != null) {
           var td = tr.children[matchIdx + 1]; // +1 for checkbox col
           if (td) {
             var pct = meta.match_pct;
