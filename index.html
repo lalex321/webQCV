@@ -2084,7 +2084,9 @@
       localStorage.setItem(STORAGE_KEYS.jd_text, jdText.value);
     });
     jdText.addEventListener("input", () => {
-      if (hasGapData && jdText.value !== lastAnalyzedJd) {
+      var jdChanged = hasGapData && jdText.value !== lastAnalyzedJd;
+      var downloadVisible = !topDownloadLink.classList.contains("hidden");
+      if (jdChanged || downloadVisible) {
         gapPanel.classList.add("hidden");
         hasGapData = false;
         gapAnalysisReady = false;
@@ -2310,7 +2312,8 @@
       return BATCH_COLS_DEFAULT.slice();
     })();
 
-    let batchData = [], batchFiltered = [], batchSortCol = "date", batchSortAsc = false, batchLoaded = false, batchLastChecked = null;
+    var _savedSort = JSON.parse(localStorage.getItem("batchSort") || "{}");
+    let batchData = [], batchFiltered = [], batchSortCol = _savedSort.col || "date", batchSortAsc = _savedSort.asc === true, batchLoaded = false, batchLastChecked = null;
     const batchBody = document.getElementById("batchBody");
     const batchEmpty = document.getElementById("batchEmpty");
     var batchSelectAll; // initialized in renderBatchHead
@@ -2418,6 +2421,7 @@
           if (e.target.classList.contains("col-resize")) return;
           if (batchSortCol === col.key) { batchSortAsc = !batchSortAsc; }
           else { batchSortCol = col.key; batchSortAsc = true; }
+          localStorage.setItem("batchSort", JSON.stringify({col: batchSortCol, asc: batchSortAsc}));
           batchSort();
         });
 
