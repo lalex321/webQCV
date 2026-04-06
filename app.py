@@ -1541,9 +1541,9 @@ async def github_import(request: Request):
     if not login:
         raise HTTPException(400, "GitHub login required.")
     config = _core.load_config()
-    token = config.get("github_token", "")
+    token = _resolve_github_token(config)
     if not token:
-        raise HTTPException(400, "GitHub PAT not configured.")
+        raise HTTPException(400, "GitHub PAT not configured. Set it at /setup or via GITHUB_TOKEN env var.")
     model_name = choose_model_name(config)
     api_key = resolve_api_key(APP_DIR, config)
     configure_gemini(api_key)
