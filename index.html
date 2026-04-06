@@ -546,6 +546,7 @@
         <button class="page-tab-btn active" data-pane="paneConvert">Convert</button>
         <button class="page-tab-btn" data-pane="paneBatch">Database</button>
         <button class="page-tab-btn" data-pane="paneXray">X Ray</button>
+        <button class="page-tab-btn" data-pane="paneGithub">GitHub</button>
         <button class="page-tab-btn" data-pane="paneLogs">Logs</button>
         <button class="page-tab-btn" data-pane="panePrompt">Prompt</button>
       </div>
@@ -704,6 +705,32 @@
           <tbody id="batchBody"></tbody>
         </table>
         <div id="batchEmpty" class="batch-empty">No stored CVs yet. Convert a CV on the Convert tab first.</div>
+      </div>
+    </div>
+
+    <div class="page-pane hidden" id="paneGithub" style="display:flex;flex-direction:column">
+      <div style="padding:12px 24px;display:flex;flex-direction:column;flex:1;min-height:0">
+        <div style="margin-bottom:8px">
+          <strong style="font-size:15px">GitHub Sourcing Miner</strong>
+          <div style="color:#64748b;font-size:12px;margin-top:2px">Find active developers from top GitHub repositories by tech stack.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <label style="font-size:11px;color:#64748b;margin:0">Tech Stack (Keywords)</label>
+            <input id="ghKeywords" type="text" placeholder="e.g., Python, React, AWS" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit" />
+          </div>
+          <div style="width:180px">
+            <label style="font-size:11px;color:#64748b;margin:0">Location (optional)</label>
+            <input id="ghLocation" type="text" placeholder="e.g., Europe" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit" />
+          </div>
+          <div style="width:100px">
+            <label style="font-size:11px;color:#64748b;margin:0">Min Stars</label>
+            <input id="ghMinStars" type="number" value="100" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit" />
+          </div>
+          <button id="ghMineBtn" class="batch-btn" style="background:var(--primary);color:#fff;padding:5px 16px;font-weight:600">Start Mining</button>
+        </div>
+        <div id="ghStatus" style="font-size:11px;color:#64748b;margin-top:6px"></div>
+        <div id="ghResults" style="margin-top:10px;flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px"></div>
       </div>
     </div>
 
@@ -3089,6 +3116,112 @@
         alert("Error: " + e.message);
       }
     }
+
+    /* ── GitHub Miner tab ── */
+    var ghKeywords = document.getElementById("ghKeywords");
+    var ghLocation = document.getElementById("ghLocation");
+    var ghMinStars = document.getElementById("ghMinStars");
+    var ghMineBtn = document.getElementById("ghMineBtn");
+    var ghResults = document.getElementById("ghResults");
+    var ghStatus = document.getElementById("ghStatus");
+
+    // Persist inputs
+    ["ghKeywords","ghLocation","ghMinStars"].forEach(function(id) {
+      var el = document.getElementById(id);
+      var saved = localStorage.getItem(id);
+      if (saved) el.value = saved;
+      el.addEventListener("input", function() { localStorage.setItem(id, el.value); });
+    });
+
+    function ghCreateCard(c) {
+      var card = document.createElement("div");
+      card.style.cssText = "border:1px solid #a8b5c4;border-radius:8px;padding:12px 14px;background:#fff";
+      // Header
+      var header = document.createElement("div");
+      header.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap";
+      header.innerHTML = '<span style="font-weight:700;font-size:13px">' + c.name + '</span>' +
+        '<span style="color:#64748b;font-size:12px">@' + c.login + '</span>' +
+        '<span style="margin-left:auto;color:#64748b;font-size:11px">' + c.repo + ' (' + c.contributions + ' commits)</span>';
+      card.appendChild(header);
+      // Bio
+      if (c.bio) {
+        var bio = document.createElement("div");
+        bio.style.cssText = "font-size:12px;color:#475569;font-style:italic;margin-bottom:6px";
+        bio.textContent = c.bio;
+        card.appendChild(bio);
+      }
+      // Info row
+      var info = document.createElement("div");
+      info.style.cssText = "display:flex;gap:16px;font-size:11px;color:#64748b;margin-bottom:8px;flex-wrap:wrap";
+      info.innerHTML = '<span>&#x1F4CD; ' + c.location + '</span>' +
+        '<span>&#x1F3E2; ' + c.company + '</span>' +
+        '<span>&#x2709; ' + c.email + '</span>';
+      card.appendChild(info);
+      // Actions
+      var actions = document.createElement("div");
+      actions.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
+      var importBtn = document.createElement("button");
+      importBtn.className = "batch-btn";
+      importBtn.style.cssText = "font-size:11px;padding:3px 10px;background:#16a34a;color:#fff";
+      importBtn.textContent = "Analyze & Import";
+      importBtn.addEventListener("click", function() {
+        importBtn.disabled = true;
+        importBtn.textContent = "Importing...";
+        fetch("/github/import", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({login: c.login})
+        }).then(function(r) {
+          if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Error"); });
+          return r.json();
+        }).then(function(data) {
+          importBtn.textContent = "Imported!";
+          importBtn.style.background = "#94a3b8";
+        }).catch(function(err) {
+          importBtn.textContent = "Error";
+          importBtn.disabled = false;
+          importBtn.style.background = "#dc2626";
+          setTimeout(function() { importBtn.textContent = "Analyze & Import"; importBtn.style.background = "#16a34a"; }, 2000);
+        });
+      });
+      actions.appendChild(importBtn);
+      var ghLink = document.createElement("a");
+      ghLink.href = c.html_url; ghLink.target = "_blank"; ghLink.rel = "noopener";
+      ghLink.className = "batch-btn"; ghLink.style.cssText = "text-decoration:none;font-size:11px;padding:3px 10px";
+      ghLink.textContent = "Open GitHub";
+      actions.appendChild(ghLink);
+      var liLink = document.createElement("a");
+      liLink.href = "https://www.linkedin.com/search/results/people/?keywords=" + encodeURIComponent(c.name);
+      liLink.target = "_blank"; liLink.rel = "noopener"; liLink.className = "batch-btn";
+      liLink.style.cssText = "text-decoration:none;font-size:11px;padding:3px 10px;background:#e3f2fd;color:#1565c0";
+      liLink.textContent = "Search LinkedIn";
+      actions.appendChild(liLink);
+      card.appendChild(actions);
+      return card;
+    }
+
+    ghMineBtn.addEventListener("click", function() {
+      var kw = ghKeywords.value.trim();
+      if (kw.length < 3) { ghStatus.textContent = "Enter at least 3 characters for keywords."; return; }
+      ghMineBtn.disabled = true;
+      ghStatus.textContent = "Mining GitHub...";
+      ghResults.innerHTML = "";
+      fetch("/github/mine", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({keywords: kw, location: ghLocation.value.trim(), min_stars: parseInt(ghMinStars.value) || 100})
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Server error"); });
+        return r.json();
+      }).then(function(candidates) {
+        ghStatus.textContent = candidates.length + " candidates found";
+        candidates.forEach(function(c) { ghResults.appendChild(ghCreateCard(c)); });
+      }).catch(function(err) {
+        ghStatus.textContent = "Error: " + err.message;
+      }).finally(function() {
+        ghMineBtn.disabled = false;
+      });
+    });
 
     /* ── X Ray tab ── */
     var xrayInput = document.getElementById("xrayInput");

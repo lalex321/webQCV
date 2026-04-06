@@ -7,3 +7,4 @@ _store/
 backup/
 usage_log.jsonl
 .api_key
+.github_token

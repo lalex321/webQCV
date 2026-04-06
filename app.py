@@ -451,6 +451,19 @@ async def batch_store_action(request: Request):
     return {"ok": True, "jobs": created_jobs}
 
 
+def _resolve_github_token(cfg: dict) -> str:
+    """Resolve GitHub PAT: env GITHUB_TOKEN > .github_token file > settings."""
+    env = os.environ.get("GITHUB_TOKEN", "").strip()
+    if env:
+        return env
+    token_file = APP_DIR / ".github_token"
+    if token_file.exists():
+        val = token_file.read_text(encoding="utf-8").strip()
+        if val:
+            return val
+    return cfg.get("github_token", "")
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page():
     cfg = _core.load_config()
@@ -467,6 +480,19 @@ def setup_page():
     status_color = "#2e7d32" if current_key else "#c62828"
     status_text = f"Key {key_display} — source: {key_source}" if current_key else "⚠️ No API key configured"
 
+    # GitHub PAT status
+    gh_token = _resolve_github_token(cfg)
+    gh_display = "[configured]" if gh_token else "(not set)"
+    gh_color = "#2e7d32" if gh_token else "#888"
+    gh_source = ""
+    if os.environ.get("GITHUB_TOKEN", "").strip():
+        gh_source = "env <code>GITHUB_TOKEN</code>"
+    elif (APP_DIR / ".github_token").exists():
+        gh_source = "<code>.github_token</code> file"
+    elif cfg.get("github_token"):
+        gh_source = "<code>~/.quantoricv_settings.json</code>"
+    gh_status = f"GitHub PAT {gh_display}" + (f" — source: {gh_source}" if gh_source else "")
+
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -475,7 +501,7 @@ def setup_page():
   <style>
     body {{ font-family: Arial, sans-serif; max-width: 520px; margin: 60px auto; color: #222; }}
     h1 {{ margin-bottom: 4px; }}
-    .status {{ padding: 10px 14px; border-radius: 6px; background: #f5f5f5; color: {status_color};
+    .status {{ padding: 10px 14px; border-radius: 6px; background: #f5f5f5;
                font-size: 14px; margin: 16px 0 24px; }}
     label {{ display: block; font-weight: bold; margin-bottom: 6px; }}
     input[type=text] {{ width: 100%; padding: 8px 10px; font-size: 14px; border: 1px solid #ccc;
@@ -485,20 +511,35 @@ def setup_page():
     button:hover {{ background: #0d47a1; }}
     .note {{ margin-top: 20px; font-size: 12px; color: #666; }}
     a {{ color: #1565c0; }}
+    .section {{ margin-bottom: 24px; }}
+    hr {{ border: none; border-top: 1px solid #e0e0e0; margin: 24px 0; }}
   </style>
 </head>
 <body>
   <h1>Q-CV Setup</h1>
-  <div class="status">{status_text}</div>
-  <form method="post" action="/setup">
-    <label for="key">Gemini API Key</label>
-    <input type="text" id="key" name="api_key" placeholder="AIza..." autocomplete="off">
-    <button type="submit">Save &amp; Apply</button>
-  </form>
+  <div class="status" style="color:{status_color}">{status_text}</div>
+  <div class="section">
+    <form method="post" action="/setup">
+      <label for="key">Gemini API Key</label>
+      <input type="text" id="key" name="api_key" placeholder="AIza..." autocomplete="off">
+      <input type="hidden" name="field" value="gemini">
+      <button type="submit">Save &amp; Apply</button>
+    </form>
+  </div>
+  <hr>
+  <div class="status" style="color:{gh_color}">{gh_status}</div>
+  <div class="section">
+    <form method="post" action="/setup">
+      <label for="gh_key">GitHub Personal Access Token (for GitHub Miner)</label>
+      <input type="text" id="gh_key" name="github_token" placeholder="ghp_..." autocomplete="off">
+      <input type="hidden" name="field" value="github">
+      <button type="submit">Save &amp; Apply</button>
+    </form>
+  </div>
   <p class="note">
-    The key is saved to <code>.api_key</code> in the app directory and takes effect immediately —
-    no server restart needed.<br><br>
-    Priority: <code>GEMINI_API_KEY</code> env var &gt; <code>.api_key</code> file &gt; <code>~/.quantoricv_settings.json</code><br><br>
+    Keys are saved to local files and take effect immediately — no server restart needed.<br><br>
+    Gemini priority: <code>GEMINI_API_KEY</code> env &gt; <code>.api_key</code> file &gt; <code>~/.quantoricv_settings.json</code><br>
+    GitHub priority: <code>GITHUB_TOKEN</code> env &gt; <code>.github_token</code> file &gt; <code>~/.quantoricv_settings.json</code><br><br>
     <a href="/">← Back to converter</a>
   </p>
 </body>
@@ -507,11 +548,21 @@ def setup_page():
 
 
 @app.post("/setup")
-async def setup_save(api_key: str = Form(...)):
-    key = api_key.strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="API key cannot be empty")
-    (APP_DIR / ".api_key").write_text(key, encoding="utf-8")
+async def setup_save(
+    api_key: str = Form(None),
+    github_token: str = Form(None),
+    field: str = Form("gemini"),
+):
+    if field == "github" and github_token:
+        token = github_token.strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="Token cannot be empty")
+        (APP_DIR / ".github_token").write_text(token, encoding="utf-8")
+    elif api_key:
+        key = api_key.strip()
+        if not key:
+            raise HTTPException(status_code=400, detail="API key cannot be empty")
+        (APP_DIR / ".api_key").write_text(key, encoding="utf-8")
     return RedirectResponse(url="/setup?saved=1", status_code=303)
 
 
@@ -682,6 +733,8 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
         links_dump = json.dumps(basics.get("links", [])).lower()
         if "linkedin.com" in links_dump or "linkedin" in fname_lower or fname_lower.startswith("profile"):
             comments = "Source: LinkedIn"
+        elif "github.com" in fname_lower:
+            comments = "Source: GitHub"
         else:
             comments = ""
 
@@ -1405,3 +1458,135 @@ async def xray_search(request: Request):
                 "query": str(q.get("query", "")),
             })
     return result
+
+
+# ── GitHub Miner ──────────────────────────────────────────────
+
+_GH_API = "https://api.github.com"
+
+
+def _gh_get(endpoint: str, token: str) -> dict | list | None:
+    """Authenticated GitHub API GET request."""
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        r = httpx.get(f"{_GH_API}{endpoint}", headers=headers, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+@app.post("/github/mine")
+async def github_mine(request: Request):
+    """Search GitHub repos by keywords, extract contributors, return candidate profiles."""
+    body = await request.json()
+    keywords = (body.get("keywords") or "").strip()
+    location = (body.get("location") or "").strip().lower()
+    min_stars = int(body.get("min_stars") or 100)
+    if len(keywords) < 3:
+        raise HTTPException(400, "Keywords must be at least 3 characters.")
+    config = _core.load_config()
+    token = _resolve_github_token(config)
+    if not token:
+        raise HTTPException(400, "GitHub PAT not configured. Set it at /setup or via GITHUB_TOKEN env var.")
+
+    # Phase 1: search repos
+    import urllib.parse
+    query = urllib.parse.quote(keywords)
+    repos_data = _gh_get(f"/search/repositories?q={query}+stars:>={min_stars}&sort=stars&order=desc&per_page=10", token)
+    if not repos_data or not repos_data.get("items"):
+        return []
+
+    # Phase 2: extract contributors
+    unique_users = {}
+    for repo in repos_data["items"]:
+        repo_name = repo["full_name"]
+        contribs = _gh_get(f"/repos/{repo_name}/contributors?per_page=5", token)
+        if not contribs:
+            continue
+        for c in contribs:
+            login = c.get("login", "")
+            if login and login not in unique_users and "[bot]" not in login:
+                unique_users[login] = {"repo": repo_name, "contributions": c.get("contributions", 0)}
+
+    # Phase 3: fetch profiles and filter by location
+    candidates = []
+    for login, meta in unique_users.items():
+        profile = _gh_get(f"/users/{login}", token)
+        if not profile:
+            continue
+        user_loc = profile.get("location") or ""
+        if location and location not in user_loc.lower():
+            continue
+        candidates.append({
+            "login": login,
+            "name": profile.get("name") or login,
+            "location": user_loc or "Unknown",
+            "company": profile.get("company") or "Independent",
+            "email": profile.get("email") or "Hidden",
+            "bio": profile.get("bio") or "",
+            "html_url": profile.get("html_url", ""),
+            "repo": meta["repo"],
+            "contributions": meta["contributions"],
+        })
+
+    return candidates
+
+
+@app.post("/github/import")
+async def github_import(request: Request):
+    """Import a GitHub profile: fetch repos, LLM→CV JSON, save to store."""
+    body = await request.json()
+    login = (body.get("login") or "").strip()
+    if not login:
+        raise HTTPException(400, "GitHub login required.")
+    config = _core.load_config()
+    token = config.get("github_token", "")
+    if not token:
+        raise HTTPException(400, "GitHub PAT not configured.")
+    model_name = choose_model_name(config)
+    api_key = resolve_api_key(APP_DIR, config)
+    configure_gemini(api_key)
+
+    # Fetch user profile and repos
+    user_data = _gh_get(f"/users/{login}", token)
+    if not user_data:
+        raise HTTPException(502, f"Failed to fetch GitHub profile for {login}")
+    repos_data = _gh_get(f"/users/{login}/repos?sort=updated&per_page=10", token) or []
+
+    # Build prompt
+    prompt_template = config.get("prompt_github", _core.DEFAULT_PROMPTS.get("prompt_github", ""))
+    gh_full_data = json.dumps({"user": user_data, "recent_repos": repos_data}, ensure_ascii=False)
+    prompt = prompt_template.replace("{prompt_schema_only}", _core.CV_JSON_SCHEMA).replace("{gh_full_data}", gh_full_data)
+
+    # Call LLM
+    _JOB_SEMAPHORE.acquire()
+    try:
+        cv_json = call_llm_json(prompt, model_name)
+    except Exception as e:
+        raise HTTPException(500, f"LLM error: {e}")
+    finally:
+        _JOB_SEMAPHORE.release()
+
+    if not isinstance(cv_json, dict):
+        raise HTTPException(500, "LLM returned invalid CV data")
+
+    # Sanitize
+    cv_json = _core.sanitize_json(cv_json)
+
+    # Generate store ID from login
+    store_id = hashlib.sha256(f"github_{login}".encode()).hexdigest()
+
+    # Save to store (dedup by name)
+    source_filename = f"github.com/{login}"
+    name = cv_json.get("basics", {}).get("name", login)
+    existing = _find_store_by_name(name)
+    if existing:
+        store_id = existing.stem
+    _save_to_store(store_id, cv_json, source_filename)
+
+    return {
+        "ok": True,
+        "store_id": store_id,
+        "name": name,
+    }
