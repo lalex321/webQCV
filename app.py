@@ -18,7 +18,7 @@ from html import escape
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key, _build_output_base_name, choose_model_name, configure_gemini
+from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key, _build_output_base_name, choose_model_name, configure_gemini, call_llm_json
 import cv_engine as _core
 
 APP_DIR = Path(__file__).resolve().parent
@@ -35,7 +35,7 @@ app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
 _JOB_SEMAPHORE = threading.Semaphore(5)  # max 5 concurrent LLM jobs
-_STORE_LOCK = threading.Lock()  # serialize store file writes
+_STORE_LOCK = threading.RLock()  # serialize store file writes (reentrant for nested calls)
 
 import re
 _STORE_ID_RE = re.compile(r'^[a-fA-F0-9]+$')
@@ -838,6 +838,9 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         def dbg(text: str) -> None:
             jobs.update(job_id, debug=text)
 
+        # Shared store ID — set by early save, reused by final save
+        _resolved_store_id = [None]  # mutable container for closure
+
         # Create pause event for gap analysis (tailor jobs only, unless skip_gap)
         pause_event = None
         gap_ready_cb = None
@@ -870,6 +873,12 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                             sid = source_key or hashlib.sha256(
                                 json.dumps(base_json, sort_keys=True).encode()
                             ).hexdigest()
+                            # Dedup by name
+                            name = base_json.get("basics", {}).get("name", "")
+                            existing = _find_store_by_name(name)
+                            if existing:
+                                sid = existing.stem
+                            _resolved_store_id[0] = sid
                             if not (STORE_DIR / f"{sid}.json").exists():
                                 _save_to_store(sid, base_json, source_path.name)
                             # Save gap analysis immediately (shows "Analyzed" badge)
@@ -949,14 +958,16 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         try:
             job = jobs.get(job_id)
             if base_json:
-                sid = source_key or hashlib.sha256(
-                    json.dumps(base_json, sort_keys=True).encode()
-                ).hexdigest()
-                # Save to store (dedup by hash and name)
-                name = base_json.get("basics", {}).get("name", "")
-                existing_by_name = _find_store_by_name(name)
-                if existing_by_name:
-                    sid = existing_by_name.stem  # reuse existing store ID
+                # Reuse store ID from early save if available
+                sid = _resolved_store_id[0]
+                if not sid:
+                    sid = source_key or hashlib.sha256(
+                        json.dumps(base_json, sort_keys=True).encode()
+                    ).hexdigest()
+                    name = base_json.get("basics", {}).get("name", "")
+                    existing_by_name = _find_store_by_name(name)
+                    if existing_by_name:
+                        sid = existing_by_name.stem
                 if not (STORE_DIR / f"{sid}.json").exists():
                     _save_to_store(sid, base_json, source_path.name)
                 # Save tailoring session if tailor was performed
@@ -1367,3 +1378,35 @@ async def cancel_job(job_id: str):
     if job.status not in ("Done", "Failed"):
         jobs.update(job_id, status="Failed", progress=100, error="Cancelled by user")
     return {"ok": True}
+
+
+@app.post("/xray")
+async def xray_search(request: Request):
+    """Generate X-Ray Boolean search queries from a candidate description."""
+    body = await request.json()
+    user_input = (body.get("query") or "").strip()
+    if len(user_input) < 5:
+        raise HTTPException(400, "Please enter a longer description (at least 5 characters).")
+    config = _core.load_config()
+    model_name = choose_model_name(config)
+    api_key = resolve_api_key(APP_DIR, config)
+    configure_gemini(api_key)
+    prompt_template = config.get("prompt_xray", _core.DEFAULT_PROMPTS.get("prompt_xray", ""))
+    if not prompt_template:
+        raise HTTPException(500, "X-Ray prompt not configured.")
+    prompt = prompt_template.replace("{user_input}", user_input[:1000])
+    try:
+        queries = call_llm_json(prompt, model_name)
+    except Exception as e:
+        raise HTTPException(500, f"LLM error: {e}")
+    if not isinstance(queries, list):
+        queries = [queries]
+    result = []
+    for q in queries:
+        if isinstance(q, dict) and "query" in q:
+            result.append({
+                "platform": str(q.get("platform", "Search")),
+                "description": str(q.get("description", "")),
+                "query": str(q.get("query", "")),
+            })
+    return result

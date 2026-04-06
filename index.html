@@ -468,12 +468,12 @@
       max-height:120px;
       overflow:hidden;
       cursor:pointer;
-      resize:none;
     }
     .jd-collapsed:focus{
       max-height:none;
       overflow:auto;
       cursor:text;
+      resize:vertical;
       resize:vertical;
     }
 
@@ -544,7 +544,8 @@
     <div class="page-tabs">
       <div class="page-tab-bar">
         <button class="page-tab-btn active" data-pane="paneConvert">Convert</button>
-        <button class="page-tab-btn" data-pane="paneBatch">History</button>
+        <button class="page-tab-btn" data-pane="paneBatch">Database</button>
+        <button class="page-tab-btn" data-pane="paneXray">X Ray</button>
         <button class="page-tab-btn" data-pane="paneLogs">Logs</button>
         <button class="page-tab-btn" data-pane="panePrompt">Prompt</button>
       </div>
@@ -703,6 +704,21 @@
           <tbody id="batchBody"></tbody>
         </table>
         <div id="batchEmpty" class="batch-empty">No stored CVs yet. Convert a CV on the Convert tab first.</div>
+      </div>
+    </div>
+
+    <div class="page-pane hidden" id="paneXray" style="display:flex;flex-direction:column">
+      <div style="padding:12px 24px;display:flex;flex-direction:column;flex:1;min-height:0">
+        <div style="margin-bottom:8px">
+          <strong style="font-size:15px">AI Sourcing Assistant (X-Ray Search)</strong>
+          <div style="color:#64748b;font-size:12px;margin-top:2px">Describe the ideal candidate. Gemini will create Boolean search formulas for LinkedIn, GitHub and web.</div>
+        </div>
+        <textarea id="xrayInput" rows="5" placeholder="e.g., Python developer with 5+ years AWS experience, located in Europe" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;resize:vertical;font-family:inherit"></textarea>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
+          <button id="xrayGenerateBtn" class="batch-btn" style="background:var(--primary);color:#fff;padding:5px 16px;font-weight:600">Generate X-Ray Queries</button>
+          <span id="xrayStatus" style="font-size:11px;color:#64748b"></span>
+        </div>
+        <div id="xrayResults" style="margin-top:12px;flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px"></div>
       </div>
     </div>
 
@@ -3073,6 +3089,73 @@
         alert("Error: " + e.message);
       }
     }
+
+    /* ── X Ray tab ── */
+    var xrayInput = document.getElementById("xrayInput");
+    var xrayGenerateBtn = document.getElementById("xrayGenerateBtn");
+    var xrayResults = document.getElementById("xrayResults");
+    var xrayStatus = document.getElementById("xrayStatus");
+
+    // Persist last query
+    var savedXrayQuery = localStorage.getItem("xrayQuery");
+    if (savedXrayQuery) xrayInput.value = savedXrayQuery;
+    xrayInput.addEventListener("input", function() {
+      localStorage.setItem("xrayQuery", xrayInput.value);
+    });
+
+    function xrayCreateCard(q) {
+      var card = document.createElement("div");
+      card.style.cssText = "border:1px solid #a8b5c4;border-radius:8px;padding:12px 14px;background:#fff";
+      var iconName = q.platform.toLowerCase() === "github" ? "GitHub" : q.platform.toLowerCase() === "linkedin" ? "LinkedIn" : "Web";
+      var header = document.createElement("div");
+      header.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:6px";
+      header.innerHTML = '<span style="font-weight:700;font-size:13px;color:var(--primary)">' + iconName + '</span>' +
+        '<span style="color:#64748b;font-size:12px">' + (q.description || "") + '</span>';
+      card.appendChild(header);
+
+      var queryBox = document.createElement("div");
+      queryBox.style.cssText = "background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-size:12px;font-family:monospace;word-break:break-all;white-space:pre-wrap;color:#334155;margin-bottom:8px;user-select:all";
+      queryBox.textContent = q.query;
+      card.appendChild(queryBox);
+
+      var actions = document.createElement("div");
+      actions.style.cssText = "display:flex;gap:8px";
+      var googleUrl = "https://www.google.com/search?q=" + encodeURIComponent(q.query);
+      actions.innerHTML = '<a href="' + googleUrl + '" target="_blank" rel="noopener" class="batch-btn" style="text-decoration:none;font-size:11px;padding:3px 10px;background:#e3f2fd;color:#1565c0">Open in Google</a>' +
+        '<button class="batch-btn xray-copy-btn" style="font-size:11px;padding:3px 10px" title="Copy to clipboard">Copy</button>';
+      actions.querySelector(".xray-copy-btn").addEventListener("click", function() {
+        navigator.clipboard.writeText(q.query).then(function() {
+          var btn = actions.querySelector(".xray-copy-btn");
+          btn.textContent = "Copied!";
+          setTimeout(function() { btn.textContent = "Copy"; }, 1500);
+        });
+      });
+      card.appendChild(actions);
+      return card;
+    }
+
+    xrayGenerateBtn.addEventListener("click", function() {
+      var query = xrayInput.value.trim();
+      if (query.length < 5) { xrayStatus.textContent = "Please enter a longer description."; return; }
+      xrayGenerateBtn.disabled = true;
+      xrayStatus.textContent = "Generating...";
+      xrayResults.innerHTML = "";
+      fetch("/xray", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query })
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Server error"); });
+        return r.json();
+      }).then(function(queries) {
+        xrayStatus.textContent = queries.length + " queries generated";
+        queries.forEach(function(q) { xrayResults.appendChild(xrayCreateCard(q)); });
+      }).catch(function(err) {
+        xrayStatus.textContent = "Error: " + err.message;
+      }).finally(function() {
+        xrayGenerateBtn.disabled = false;
+      });
+    });
 
     /* ── Logs tab ── */
     const logsContent = document.getElementById("logsContent");
