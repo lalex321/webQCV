@@ -106,7 +106,7 @@ _store/                 Persistent CV store (JSON files keyed by SHA256 of sourc
 
 ### LLM Integration
 
-- Model: `gemini-2.0-flash` (`choose_model_name()` in `converter_engine.py`)
+- Model: `gemini-2.5-flash` (`choose_model_name()` in `converter_engine.py`)
 - SDK: `from google import genai` — `genai.Client(api_key=...)` per call
 - Images/PDFs uploaded via `client.files.upload()` with state polling until `ACTIVE`
 - Retry logic for 429/quota errors in `_retry_on_rate_limit()` with delays [5,5,5,10,10]
