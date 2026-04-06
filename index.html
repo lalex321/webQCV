@@ -3172,16 +3172,16 @@
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({login: c.login})
         }).then(function(r) {
-          if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Error"); });
+          if (!r.ok) return r.text().then(function(t) { try { var e=JSON.parse(t); throw new Error(e.detail||"Error "+r.status); } catch(x) { if(x.message) throw x; throw new Error("Error "+r.status); } });
           return r.json();
         }).then(function(data) {
           importBtn.textContent = "Imported!";
           importBtn.style.background = "#94a3b8";
         }).catch(function(err) {
-          importBtn.textContent = "Error";
+          importBtn.textContent = err.message || "Error";
           importBtn.disabled = false;
           importBtn.style.background = "#dc2626";
-          setTimeout(function() { importBtn.textContent = "Analyze & Import"; importBtn.style.background = "#16a34a"; }, 2000);
+          setTimeout(function() { importBtn.textContent = "Analyze & Import"; importBtn.style.background = "#16a34a"; }, 3000);
         });
       });
       actions.appendChild(importBtn);
