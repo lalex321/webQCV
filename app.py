@@ -394,21 +394,16 @@ async def batch_store_action(request: Request):
             job = jobs.create(f"analyze_{sid[:8]}", anonymize=False, autofix=False, template_name="")
             created_jobs.append({"store_id": sid, "job_id": job.job_id})
 
-        # Single orchestrator thread runs jobs one by one
-        if created_jobs:
-            def _batch_analyze_orchestrator():
-                for item in created_jobs:
-                    sid, jid = item["store_id"], item["job_id"]
-                    job = jobs.get(jid)
-                    if job and getattr(job, "_cancelled", False):
-                        jobs.update(jid, status="Cancelled", progress=100)
-                        continue
-                    cv_json = _load_store_cv(sid)
-                    if not cv_json:
-                        jobs.update(jid, status="Failed", progress=100, error="CV not found")
-                        continue
-                    _run_batch_analyze(jid, sid, cv_json, jd_text)
-            thread = threading.Thread(target=_batch_analyze_orchestrator, daemon=True)
+        # Launch all batch analyze jobs — semaphore limits concurrency to 5
+        for item in created_jobs:
+            sid, jid = item["store_id"], item["job_id"]
+            cv_json = _load_store_cv(sid)
+            if not cv_json:
+                jobs.update(jid, status="Failed", progress=100, error="CV not found")
+                continue
+            thread = threading.Thread(
+                target=_run_batch_analyze, args=(jid, sid, cv_json, jd_text), daemon=True
+            )
             thread.start()
 
         return {"ok": True, "jobs": created_jobs, "skipped": skipped}
