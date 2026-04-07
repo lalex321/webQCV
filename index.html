@@ -867,6 +867,7 @@
     let detailsPayload = null;
     let pollTimer = null;
     let pollErrorCount = 0;
+    let lastDebugMsg = "";
     let optionsChangedSinceJob = false;
     const POLL_MAX_ERRORS = 5;
 
@@ -1168,6 +1169,7 @@
       setStatus("Ready", 0, "");
       statusBarFile.textContent = "";
       pollErrorCount = 0;
+      lastDebugMsg = "";
       gapPanel.classList.add("hidden");
       gapAnalysisReady = false;
       hasGapData = false;
@@ -2001,7 +2003,8 @@
         const data = await res.json();
         pollErrorCount = 0;
 
-        setStatus(data.status, data.progress, data.error, data.debug || "");
+        setStatus(data.status, data.progress, data.error);
+        if (data.debug && data.debug !== lastDebugMsg) { appLog(data.debug); lastDebugMsg = data.debug; }
         detailsPayload = data.details || detailsPayload;
 
         // Gap analysis ready — show analysis panel, pause polling
