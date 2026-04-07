@@ -108,8 +108,10 @@
     .convert-pane .shell{flex-shrink:0}
     .convert-scroll{flex:1;overflow:auto;padding:0 0 8px}
     .global-statusbar{display:flex;align-items:center;gap:10px;padding:4px 18px;border-top:1px solid #a8b5c4;background:#f0f2f6;font-size:12px;color:#475569;min-height:24px;position:relative;border-radius:0 0 18px 18px}
-    .statusbar-progress{position:absolute;left:0;top:0;height:3px;width:100%;background:#d0d7e2;overflow:hidden}
-    .statusbar-bar{height:100%;width:0%;background:var(--primary);transition:width .3s}
+    .statusbar-progress{position:absolute;left:0;top:0;height:6px;width:100%;background:#d0d7e2;overflow:hidden}
+    .statusbar-bar{height:100%;width:0%;background:#2563eb;transition:width .3s}
+    .statusbar-bar.indeterminate{width:30%;animation:indeterminate 1.5s ease-in-out infinite}
+    @keyframes indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(433%)}}
     .statusbar-status{font-weight:600;color:#1e293b}
     .statusbar-error{color:#dc2626}
     .statusbar-file{margin-left:auto;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:250px}
@@ -765,8 +767,10 @@
     <div id="globalStatusBar" class="global-statusbar">
       <div class="statusbar-progress"><div id="progressBar" class="statusbar-bar"></div></div>
       <span id="statusValue" class="statusbar-status">Ready</span>
+      <span id="statusProcess" style="color:#2563eb;font-size:11px"></span>
       <span id="errorText" class="statusbar-error"></span>
       <span id="statusBarFile" class="statusbar-file"></span>
+      <button id="jobStopBtn" class="statusbar-details hidden" type="button" style="color:#dc2626">Stop</button>
       <button id="detailsBtn" class="statusbar-details hidden" type="button">Details</button>
       <button id="batchStopBtn" class="statusbar-details hidden" type="button" style="color:#dc2626">Stop</button>
     </div>
@@ -1116,14 +1120,41 @@
       }
     }
 
-    function setStatus(status, progress, error) {
+    var statusProcess = document.getElementById("statusProcess");
+    var jobStopBtn = document.getElementById("jobStopBtn");
+
+    function setStatus(status, progress, error, processLabel) {
       const safeStatus = status || "Queued";
       const safeProgress = Math.max(0, Math.min(Number(progress) || 0, 100));
 
       statusValue.textContent = safeStatus;
-      progressBar.style.width = `${safeProgress}%`;
       errorText.textContent = error || "";
+      statusProcess.textContent = processLabel || "";
+
+      // Indeterminate mode: progress < 0 or status is active but no real progress
+      var isActive = safeStatus !== "Ready" && safeStatus !== "Done" && safeStatus !== "Failed" && safeStatus !== "Cancelled";
+      if (isActive && safeProgress === 0) {
+        progressBar.classList.add("indeterminate");
+        progressBar.style.width = "30%";
+      } else {
+        progressBar.classList.remove("indeterminate");
+        progressBar.style.width = `${safeProgress}%`;
+      }
+
+      // Show/hide stop button for active jobs
+      if (isActive && activeJobId) {
+        jobStopBtn.classList.remove("hidden");
+      } else {
+        jobStopBtn.classList.add("hidden");
+      }
     }
+
+    jobStopBtn.addEventListener("click", function() {
+      if (activeJobId) {
+        fetch("/jobs/" + activeJobId + "/cancel", { method: "POST" }).catch(function(){});
+        jobStopBtn.classList.add("hidden");
+      }
+    });
 
     function resetForNewInput() {
       activeJobId = null;
@@ -1970,7 +2001,7 @@
         const data = await res.json();
         pollErrorCount = 0;
 
-        setStatus(data.status, data.progress, data.error);
+        setStatus(data.status, data.progress, data.error, data.debug || "");
         detailsPayload = data.details || detailsPayload;
 
         // Gap analysis ready — show analysis panel, pause polling
