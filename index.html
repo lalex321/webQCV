@@ -162,6 +162,7 @@
     .batch-table tr.batch-active{background:rgba(250,204,21,.12)}
     .batch-table tr.clickable{cursor:pointer}
     .batch-table tr.clickable:hover{background:rgba(99,102,241,.08)}
+    .batch-table tr.selected{background:rgba(99,102,241,.15)!important}
     .shell{
       display:grid;
       grid-template-columns:1.0fr 1.0fr;
@@ -547,6 +548,7 @@
       <div class="page-tab-bar">
         <button class="page-tab-btn active" data-pane="paneConvert">Convert</button>
         <button class="page-tab-btn" data-pane="paneBatch">Database</button>
+        <button class="page-tab-btn" data-pane="paneJD">JD</button>
         <button class="page-tab-btn" data-pane="paneXray">X Ray</button>
         <button class="page-tab-btn" data-pane="paneGithub">GitHub</button>
         <button class="page-tab-btn" data-pane="paneLogs">Logs</button>
@@ -689,6 +691,7 @@
           <button id="batchImport" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">Import CVs</button>
           <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
+          <select id="batchJDSelect" class="prompt-select" style="max-width:200px"><option value="">— No JD filter —</option></select>
           <select id="batchTemplate" class="prompt-select" style="max-width:130px"></select>
           <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#475569;margin:0"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
           <button id="batchAnalyze" class="batch-btn" disabled>Analyze</button>
@@ -707,6 +710,45 @@
           <tbody id="batchBody"></tbody>
         </table>
         <div id="batchEmpty" class="batch-empty">No stored CVs yet. Convert a CV on the Convert tab first.</div>
+      </div>
+    </div>
+
+    <div class="page-pane hidden" id="paneJD" style="display:flex;flex-direction:column">
+      <div style="padding:12px 24px 0">
+        <div class="batch-toolbar">
+          <button id="jdAddBtn" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">+ New JD</button>
+          <button id="jdSaveBtn" class="batch-btn" disabled>Save</button>
+          <button id="jdDeleteBtn" class="batch-btn danger" disabled>Delete</button>
+          <span id="jdCount" style="font-size:11px;color:#64748b;margin-left:auto;white-space:nowrap"></span>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;padding:0 24px 18px;min-height:0;overflow:hidden">
+        <div style="flex:0 0 auto;max-height:40%;overflow:auto;margin-bottom:8px">
+          <table class="batch-table" id="jdTable" style="width:100%">
+            <thead><tr>
+              <th style="width:40px">#</th>
+              <th style="width:40%">Title</th>
+              <th style="width:25%">Company</th>
+              <th style="width:80px">Candidates</th>
+              <th style="width:120px">Date</th>
+            </tr></thead>
+            <tbody id="jdBody"></tbody>
+          </table>
+          <div id="jdEmpty" class="batch-empty">No JDs yet. Click "+ New JD" to add one.</div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="display:flex;gap:8px;margin-bottom:4px">
+            <div style="flex:1">
+              <label style="font-size:11px;color:#64748b;margin:0">Title</label>
+              <input id="jdTitle" type="text" placeholder="Job title" style="width:100%;box-sizing:border-box;padding:5px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit" />
+            </div>
+            <div style="width:200px">
+              <label style="font-size:11px;color:#64748b;margin:0">Company</label>
+              <input id="jdCompany" type="text" placeholder="Company name" style="width:100%;box-sizing:border-box;padding:5px 10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit" />
+            </div>
+          </div>
+          <textarea id="jdStoreText" placeholder="Paste job description here..." style="flex:1;width:100%;box-sizing:border-box;padding:10px;border:1px solid #a8b5c4;border-radius:6px;font-size:12px;font-family:inherit;resize:none;min-height:120px"></textarea>
+        </div>
       </div>
     </div>
 
@@ -2296,8 +2338,167 @@
         document.querySelectorAll(".page-pane").forEach(function(p) { p.classList.add("hidden"); });
         btn.classList.add("active");
         document.getElementById(btn.dataset.pane).classList.remove("hidden");
+        localStorage.setItem("activeTab", btn.dataset.pane);
         if (btn.dataset.pane === "panePrompt" && !promptDataLoaded) loadPrompts();
         if (btn.dataset.pane === "paneBatch" && !batchPollInterval) loadBatchStore();
+        if (btn.dataset.pane === "paneJD" && !jdDataLoaded) loadJDStore();
+      });
+    });
+
+
+    /* ── JD Store ── */
+    var jdDataLoaded = false;
+    var jdItems = [];
+    var jdSelectedId = null;
+    var jdDirty = false;
+
+    function loadJDStore() {
+      fetch("/jd_store").then(r => r.json()).then(function(data) {
+        jdItems = data.items || [];
+        jdDataLoaded = true;
+        renderJDTable();
+      });
+    }
+
+    function renderJDTable() {
+      var body = document.getElementById("jdBody");
+      var empty = document.getElementById("jdEmpty");
+      var count = document.getElementById("jdCount");
+      body.innerHTML = "";
+      count.textContent = jdItems.length + " JD" + (jdItems.length !== 1 ? "s" : "");
+      if (!jdItems.length) { empty.style.display = ""; return; }
+      empty.style.display = "none";
+      jdItems.forEach(function(jd) {
+        var tr = document.createElement("tr");
+        tr.className = "clickable";
+        if (jd.id === jdSelectedId) tr.classList.add("selected");
+        tr.innerHTML = "<td>" + jd.number + "</td>"
+          + "<td>" + (jd.title || "Untitled") + "</td>"
+          + "<td>" + (jd.company || "") + "</td>"
+          + "<td>" + (jd.candidates || 0) + "</td>"
+          + "<td>" + (jd.date || "").slice(0, 10) + "</td>";
+        tr.addEventListener("click", function() { selectJD(jd.id); });
+        body.appendChild(tr);
+      });
+    }
+
+    function selectJD(jdId) {
+      if (jdDirty && jdSelectedId && jdSelectedId !== jdId) {
+        if (!confirm("Discard unsaved changes?")) return;
+      }
+      jdSelectedId = jdId;
+      jdDirty = false;
+      document.getElementById("jdSaveBtn").disabled = true;
+      document.getElementById("jdDeleteBtn").disabled = false;
+      // Highlight row
+      document.querySelectorAll("#jdBody tr").forEach(function(tr) { tr.classList.remove("selected"); });
+      var rows = document.querySelectorAll("#jdBody tr");
+      for (var i = 0; i < jdItems.length; i++) {
+        if (jdItems[i].id === jdId) { rows[i].classList.add("selected"); break; }
+      }
+      // Load full JD
+      fetch("/jd_store/" + jdId).then(function(r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function(data) {
+        document.getElementById("jdTitle").value = data.title || "";
+        document.getElementById("jdCompany").value = data.company || "";
+        document.getElementById("jdStoreText").value = data.text || "";
+      }).catch(function(e) { console.error("Failed to load JD:", e); });
+    }
+
+    // Track changes
+    ["jdTitle", "jdCompany", "jdStoreText"].forEach(function(id) {
+      document.getElementById(id).addEventListener("input", function() {
+        if (jdSelectedId) {
+          jdDirty = true;
+          document.getElementById("jdSaveBtn").disabled = false;
+        }
+      });
+    });
+
+    // + New JD — just clears fields
+    document.getElementById("jdAddBtn").addEventListener("click", function() {
+      jdSelectedId = null;
+      jdDirty = false;
+      document.getElementById("jdTitle").value = "";
+      document.getElementById("jdCompany").value = "";
+      document.getElementById("jdStoreText").value = "";
+      document.getElementById("jdSaveBtn").disabled = false;
+      document.getElementById("jdDeleteBtn").disabled = true;
+      document.querySelectorAll("#jdBody tr").forEach(function(tr) { tr.classList.remove("selected"); });
+      document.getElementById("jdStoreText").focus();
+    });
+
+    // Save — creates new JD or updates existing
+    document.getElementById("jdSaveBtn").addEventListener("click", function() {
+      var text = document.getElementById("jdStoreText").value.trim();
+      if (!text) {
+        document.getElementById("jdStoreText").focus();
+        return;
+      }
+      var title = document.getElementById("jdTitle").value.trim();
+      var company = document.getElementById("jdCompany").value.trim();
+
+      if (!jdSelectedId) {
+        // Create new
+        fetch("/jd_store", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({text: text, title: title || undefined, company: company || undefined})
+        }).then(r => r.json()).then(function(data) {
+          if (data.exists) {
+            alert("This JD already exists (#" + data.item.number + ")");
+            selectJD(data.id);
+          } else {
+            jdItems.push(data.item);
+            renderJDTable();
+            selectJD(data.id);
+            // Refresh dropdown in Database tab
+            if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
+          }
+        });
+        return;
+      }
+
+      // Update existing
+      fetch("/jd_store/" + jdSelectedId, {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          title: document.getElementById("jdTitle").value.trim(),
+          company: document.getElementById("jdCompany").value.trim(),
+          text: document.getElementById("jdStoreText").value.trim()
+        })
+      }).then(r => r.json()).then(function(data) {
+        jdDirty = false;
+        document.getElementById("jdSaveBtn").disabled = true;
+        // Update cache
+        for (var i = 0; i < jdItems.length; i++) {
+          if (jdItems[i].id === jdSelectedId) {
+            jdItems[i].title = data.item.title;
+            jdItems[i].company = data.item.company;
+            break;
+          }
+        }
+        renderJDTable();
+      });
+    });
+
+    // Delete
+    document.getElementById("jdDeleteBtn").addEventListener("click", function() {
+      if (!jdSelectedId) return;
+      if (!confirm("Delete this JD?")) return;
+      fetch("/jd_store/" + jdSelectedId, {method: "DELETE"}).then(r => r.json()).then(function() {
+        jdItems = jdItems.filter(function(j) { return j.id !== jdSelectedId; });
+        jdSelectedId = null;
+        jdDirty = false;
+        document.getElementById("jdTitle").value = "";
+        document.getElementById("jdCompany").value = "";
+        document.getElementById("jdStoreText").value = "";
+        document.getElementById("jdSaveBtn").disabled = true;
+        document.getElementById("jdDeleteBtn").disabled = true;
+        renderJDTable();
       });
     });
 
@@ -2701,10 +2902,32 @@
 
     function esc(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
 
+    var batchJDSelect = document.getElementById("batchJDSelect");
+    var batchSelectedJD = localStorage.getItem("batchSelectedJD") || "";
+
+    async function loadBatchJDDropdown() {
+      try {
+        var r = await fetch("/jd_store");
+        var data = await r.json();
+        // Keep first option "— No JD filter —"
+        while (batchJDSelect.options.length > 1) batchJDSelect.remove(1);
+        (data.items || []).forEach(function(jd) {
+          var o = document.createElement("option");
+          o.value = jd.id;
+          o.textContent = "#" + jd.number + " " + (jd.title || "Untitled");
+          batchJDSelect.appendChild(o);
+        });
+        if (batchSelectedJD) batchJDSelect.value = batchSelectedJD;
+      } catch (e) {}
+    }
+
     async function loadBatchStore() {
       batchLoaded = true;
       try {
-        var r = await fetch("/store");
+        // Load JD dropdown FIRST so jd_id is available for store query
+        if (batchJDSelect.options.length <= 1) await loadBatchJDDropdown();
+        var jdParam = batchJDSelect.value ? "?jd_id=" + encodeURIComponent(batchJDSelect.value) : "";
+        var r = await fetch("/store" + jdParam);
         var data = await r.json();
         batchData = data.items || [];
         // Populate template dropdown
@@ -2720,6 +2943,12 @@
       } catch (e) { batchData = []; }
       batchFilter();
     }
+
+    batchJDSelect.addEventListener("change", function() {
+      batchSelectedJD = batchJDSelect.value;
+      localStorage.setItem("batchSelectedJD", batchSelectedJD);
+      loadBatchStore();
+    });
 
     batchSearch.addEventListener("input", batchFilter);
 
@@ -2941,10 +3170,17 @@
       appLog("Batch stopped by user");
     });
 
-    batchBtns.analyze.addEventListener("click", function() {
-      var jd = document.getElementById("jdText").value.trim();
-      if (!jd) { alert("Please enter a Job Description on the Convert tab first."); return; }
-      batchAction("analyze", { jd_text: jd });
+    batchBtns.analyze.addEventListener("click", async function() {
+      var jdId = batchJDSelect.value;
+      if (!jdId) { alert("Please select a JD from the dropdown first."); return; }
+      // Fetch JD text from JD Store
+      try {
+        var r = await fetch("/jd_store/" + jdId);
+        var data = await r.json();
+        var jd = (data.text || "").trim();
+        if (!jd) { alert("Selected JD has no text."); return; }
+        batchAction("analyze", { jd_text: jd });
+      } catch (e) { alert("Failed to load JD: " + e); }
     });
     batchBtns.generate.addEventListener("click", function() { batchAction("generate", { anonymize: batchAnonCheck.checked }); });
     batchBtns.del.addEventListener("click", function() { batchAction("delete"); });
@@ -3423,6 +3659,13 @@
       }
       setPrimaryAction("idle");
       setStatus("Ready", 0, "");
+
+      // Restore last active tab
+      var savedTab = localStorage.getItem("activeTab");
+      if (savedTab && savedTab !== "paneConvert") {
+        var tabBtn = document.querySelector('[data-pane="' + savedTab + '"]');
+        if (tabBtn) tabBtn.click();
+      }
 
     })();
   </script>

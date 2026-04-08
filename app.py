@@ -25,10 +25,12 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(APP_DIR)))
 TEMPLATES_DIR = APP_DIR / "templates"
 STORE_DIR = DATA_DIR / "_store"
+JD_STORE_DIR = DATA_DIR / "_jd_store"
 USAGE_LOG = DATA_DIR / "usage_log.jsonl"
 
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 STORE_DIR.mkdir(parents=True, exist_ok=True)
+JD_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
@@ -294,8 +296,35 @@ def reset_prompt(key: str):
 ## ── Store endpoints (Batch tab) ──────────────────────────────────────
 
 @app.get("/store")
-def list_store():
-    return {"items": _list_store()}
+def list_store(jd_id: str = ""):
+    items = _list_store()
+    if jd_id:
+        # Override match_pct with score for specific JD
+        for m in items:
+            sid = m.get("id", "")
+            p = STORE_DIR / f"{sid}.json"
+            if p.exists():
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    gap_sessions = data.get("_gap_sessions", {})
+                    if jd_id in gap_sessions:
+                        m["match_pct"] = int(gap_sessions[jd_id].get("gap_analysis", {}).get("match_percentage", 0))
+                    else:
+                        # Check old format — maybe this JD matches
+                        old = data.get("_gap_session")
+                        if old and old.get("jd_text"):
+                            old_jd_id = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
+                            if old_jd_id == jd_id:
+                                m["match_pct"] = int(old.get("gap_analysis", {}).get("match_percentage", 0))
+                            else:
+                                m["match_pct"] = None
+                        else:
+                            m["match_pct"] = None
+                except Exception:
+                    m["match_pct"] = None
+            else:
+                m["match_pct"] = None
+    return {"items": items}
 
 
 @app.get("/store/{store_id}")
@@ -374,14 +403,20 @@ async def batch_store_action(request: Request):
         # Filter out already analyzed with same JD
         todo_ids = []
         skipped = 0
-        jd_stripped = jd_text.strip()
+        jd_id = hashlib.sha256(jd_text.strip().encode()).hexdigest()
         for sid in ids:
             p = STORE_DIR / f"{sid}.json"
             if p.exists():
                 try:
                     store_data = json.loads(p.read_text(encoding="utf-8"))
+                    # Check new format first, then old
+                    gap_sessions = store_data.get("_gap_sessions", {})
+                    if jd_id in gap_sessions:
+                        skipped += 1
+                        continue
+                    # Old format compat
                     prev_jd = (store_data.get("_gap_session") or {}).get("jd_text", "").strip()
-                    if prev_jd == jd_stripped:
+                    if prev_jd == jd_text.strip():
                         skipped += 1
                         continue
                 except Exception:
@@ -578,6 +613,176 @@ def index():
     )
 
 
+# ── JD Store ──────────────────────────────────────────────────────────────────
+
+_JD_LOCK = threading.Lock()
+_jd_cache: list[dict] = []
+_jd_cache_ready = False
+
+def _jd_cache_init():
+    global _jd_cache_ready
+    for p in JD_STORE_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            _jd_cache.append(data)
+        except Exception:
+            continue
+    _jd_cache.sort(key=lambda j: j.get("number", 0))
+    _jd_cache_ready = True
+
+def _jd_next_number() -> int:
+    if not _jd_cache:
+        return 1
+    return max(j.get("number", 0) for j in _jd_cache) + 1
+
+def _jd_auto_title(text: str) -> str:
+    """Try to extract a job title from the first few lines of JD text."""
+    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+    if not lines:
+        return "Untitled JD"
+    # First non-empty line is often the title
+    candidate = lines[0]
+    # Strip common prefixes
+    for prefix in ("job title:", "position:", "role:", "title:", "job description:", "jd:"):
+        if candidate.lower().startswith(prefix):
+            candidate = candidate[len(prefix):].strip()
+    # If too long, truncate
+    if len(candidate) > 80:
+        candidate = candidate[:77] + "..."
+    return candidate or "Untitled JD"
+
+def _jd_auto_company(text: str) -> str:
+    """Try to extract company name from JD text."""
+    text_lower = text.lower()
+    for marker in ("company:", "employer:", "organization:", "client:"):
+        idx = text_lower.find(marker)
+        if idx >= 0:
+            rest = text[idx + len(marker):].strip()
+            line = rest.split("\n")[0].strip().rstrip(".")
+            if line:
+                return line[:60]
+    return ""
+
+
+@app.get("/jd_store")
+def list_jd_store():
+    if not _jd_cache_ready:
+        _jd_cache_init()
+    # Count candidates per JD from store cache
+    jd_counts: dict[str, int] = {}
+    with _STORE_LOCK:
+        for p in STORE_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                for jid in data.get("_gap_sessions", {}):
+                    jd_counts[jid] = jd_counts.get(jid, 0) + 1
+                # Also count old format
+                old = data.get("_gap_session")
+                if old and old.get("jd_text") and "_gap_sessions" not in data:
+                    old_jid = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
+                    jd_counts[old_jid] = jd_counts.get(old_jid, 0) + 1
+            except Exception:
+                continue
+    with _JD_LOCK:
+        items = []
+        for j in sorted(_jd_cache, key=lambda x: x.get("number", 0)):
+            items.append({
+                "id": j["id"],
+                "number": j.get("number", 0),
+                "title": j.get("title", ""),
+                "company": j.get("company", ""),
+                "date": j.get("date", ""),
+                "candidates": jd_counts.get(j["id"], 0),
+            })
+        return {"items": items}
+
+
+@app.get("/jd_store/{jd_id}")
+def get_jd_item(jd_id: str):
+    _validate_store_id(jd_id)
+    p = JD_STORE_DIR / f"{jd_id}.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="JD not found")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.post("/jd_store")
+async def create_jd(request: Request):
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="JD text is required")
+    title = body.get("title", "").strip() or _jd_auto_title(text)
+    company = body.get("company", "").strip() or _jd_auto_company(text)
+
+    jd_id = hashlib.sha256(text.encode()).hexdigest()
+
+    with _JD_LOCK:
+        if not _jd_cache_ready:
+            _jd_cache_init()
+        # Check if JD with same text already exists
+        for j in _jd_cache:
+            if j["id"] == jd_id:
+                return {"ok": True, "id": jd_id, "exists": True, "item": j}
+
+        number = _jd_next_number()
+        jd_data = {
+            "id": jd_id,
+            "number": number,
+            "title": title,
+            "company": company,
+            "text": text,
+            "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "candidates": 0,
+        }
+        (JD_STORE_DIR / f"{jd_id}.json").write_text(
+            json.dumps(jd_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        _jd_cache.append(jd_data)
+
+    return {"ok": True, "id": jd_id, "exists": False, "item": jd_data}
+
+
+@app.put("/jd_store/{jd_id}")
+async def update_jd(jd_id: str, request: Request):
+    _validate_store_id(jd_id)
+    body = await request.json()
+
+    with _JD_LOCK:
+        p = JD_STORE_DIR / f"{jd_id}.json"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="JD not found")
+        data = json.loads(p.read_text(encoding="utf-8"))
+
+        if "title" in body:
+            data["title"] = body["title"]
+        if "company" in body:
+            data["company"] = body["company"]
+        if "text" in body:
+            data["text"] = body["text"]
+
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Update cache
+        for i, j in enumerate(_jd_cache):
+            if j["id"] == jd_id:
+                _jd_cache[i] = data
+                break
+
+    return {"ok": True, "item": data}
+
+
+@app.delete("/jd_store/{jd_id}")
+def delete_jd(jd_id: str):
+    _validate_store_id(jd_id)
+    with _JD_LOCK:
+        p = JD_STORE_DIR / f"{jd_id}.json"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="JD not found")
+        p.unlink()
+        _jd_cache[:] = [j for j in _jd_cache if j["id"] != jd_id]
+    return {"ok": True}
+
+
 @app.get("/stats")
 def server_stats():
     today = time.strftime("%Y-%m-%d")
@@ -670,6 +875,33 @@ def _store_cache_init():
             continue
     _store_cache.sort(key=lambda m: m.get("date", ""), reverse=True)
     _store_cache_ready = True
+
+def _store_cache_refresh():
+    """Pick up new/changed store files (e.g. by employee_scanner or gap analysis)."""
+    with _STORE_LOCK:
+        cached_map = {m.get("id"): m for m in _store_cache}
+        changed = 0
+        for p in STORE_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                meta = data.get("_meta", {})
+                meta["id"] = p.stem
+                old = cached_map.get(p.stem)
+                if not old:
+                    _store_cache.append(meta)
+                    changed += 1
+                elif old.get("date") != meta.get("date") or old.get("match_pct") != meta.get("match_pct"):
+                    # Update existing entry
+                    for i, m in enumerate(_store_cache):
+                        if m.get("id") == p.stem:
+                            _store_cache[i] = meta
+                            break
+                    changed += 1
+            except Exception:
+                continue
+        if changed:
+            _store_cache.sort(key=lambda m: m.get("date", ""), reverse=True)
+        return changed
 
 def _store_cache_upsert(meta: dict):
     """Add or update a meta entry in the cache. Must be called with _STORE_LOCK held."""
@@ -766,8 +998,33 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
         _store_cache_upsert(dict(meta))
 
 
+def _jd_id_for_text(jd_text: str) -> str:
+    """Compute JD ID from text (sha256). Also ensures JD exists in JD Store."""
+    jd_id = hashlib.sha256(jd_text.strip().encode()).hexdigest()
+    # Auto-create JD in JD Store if not exists
+    jd_path = JD_STORE_DIR / f"{jd_id}.json"
+    if not jd_path.exists():
+        with _JD_LOCK:
+            if not _jd_cache_ready:
+                _jd_cache_init()
+            if not any(j["id"] == jd_id for j in _jd_cache):
+                jd_data = {
+                    "id": jd_id,
+                    "number": _jd_next_number(),
+                    "title": _jd_auto_title(jd_text),
+                    "company": _jd_auto_company(jd_text),
+                    "text": jd_text.strip(),
+                    "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "candidates": 0,
+                }
+                jd_path.write_text(json.dumps(jd_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                _jd_cache.append(jd_data)
+    return jd_id
+
+
 def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: dict = None) -> None:
-    """Save gap analysis to store entry — sets 'analyzed' badge."""
+    """Save gap analysis to store entry — supports multiple JDs via _gap_sessions."""
+    jd_id = _jd_id_for_text(jd_text)
     with _STORE_LOCK:
         p = STORE_DIR / f"{store_id}.json"
         if not p.exists():
@@ -776,15 +1033,29 @@ def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: 
             if not p:
                 return
         data = json.loads(p.read_text(encoding="utf-8"))
-        data["_gap_session"] = {
+
+        # Migrate old format if needed
+        if "_gap_session" in data and "_gap_sessions" not in data:
+            old = data.pop("_gap_session")
+            old_jd_id = hashlib.sha256(old.get("jd_text", "").strip().encode()).hexdigest()
+            data["_gap_sessions"] = {old_jd_id: old}
+
+        if "_gap_sessions" not in data:
+            data["_gap_sessions"] = {}
+
+        data["_gap_sessions"][jd_id] = {
             "gap_analysis": gap_analysis,
             "jd_text": jd_text,
             "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
+        # Also keep _gap_session for backward compat with frontend (points to latest)
+        data["_gap_session"] = data["_gap_sessions"][jd_id]
+
         data["_meta"]["analyzed"] = True
-        data["_meta"]["tailored"] = False  # new analysis invalidates old tailoring
-        data.pop("_tailor_session", None)  # remove stale tailor data
+        data["_meta"]["tailored"] = False
+        data.pop("_tailor_session", None)
         data["_meta"]["match_pct"] = int(gap_analysis.get("match_percentage", 0))
+        data["_meta"]["match_jd_id"] = jd_id
         data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         data["_meta"]["id"] = p.stem
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -821,10 +1092,18 @@ def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
         _store_cache_upsert(dict(data["_meta"]))
 
 
+_store_cache_last_refresh = 0.0
+
 def _list_store() -> list[dict]:
     """Return list of _meta dicts for all stored CVs (from cache)."""
+    global _store_cache_last_refresh
     if not _store_cache_ready:
         _store_cache_init()
+    # Pick up externally-added files every 10 seconds
+    now = time.time()
+    if now - _store_cache_last_refresh > 10:
+        _store_cache_last_refresh = now
+        _store_cache_refresh()
     with _STORE_LOCK:
         return sorted(list(_store_cache), key=lambda m: m.get("date", ""), reverse=True)
 
