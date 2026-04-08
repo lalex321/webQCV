@@ -2844,6 +2844,9 @@
       batchLastChecked = null;
       batchBody.innerHTML = "";
       batchEmpty.style.display = batchFiltered.length ? "none" : "";
+      batchEmpty.textContent = batchData.length
+        ? "No CVs match your search."
+        : "No stored CVs yet. Convert a CV on the Convert tab first.";
       document.getElementById("batchTable").style.display = batchFiltered.length ? "" : "none";
       var countEl = document.getElementById("batchCount");
       countEl.textContent = batchFiltered.length === batchData.length
@@ -3053,6 +3056,7 @@
         loadBatchStore();
         return;
       }
+      activeBatchId = data.batch_id || null;
       appLog("Batch " + action + ": " + data.jobs.length + " job(s) started");
       pollBatchJobs(data.jobs, action === "generate" || action === "anonymize", action);
     }
@@ -3069,6 +3073,7 @@
     var batchPollInterval = null;
     var batchCancelled = false;
     var batchRemainingJobs = null; // Map of job_id -> store_id for active batch
+    var activeBatchId = null; // server-side batch cancel flag
 
     function pollBatchJobs(jobMap, autoDownload, actionName) {
       // jobMap: [{store_id, job_id}, ...]
@@ -3104,9 +3109,13 @@
               var cb = batchBody.querySelector('input[data-id="' + sid + '"]');
               if (cb) { cb.checked = false; cb.closest("tr").classList.remove("batch-active"); }
               updateBatchRow(sid, actionName);
-            } else if (d.status === "Failed") {
+            } else if (d.status === "Failed" || d.status === "Cancelled") {
               failed++; remaining.delete(jid);
-              appLog("Batch job failed: " + (d.error || jid), "error");
+              if (d.status === "Cancelled") {
+                // Don't log each cancelled job individually
+              } else {
+                appLog("Batch job failed: " + (d.error || jid), "error");
+              }
               var cb2 = batchBody.querySelector('input[data-id="' + sid + '"]');
               if (cb2) { cb2.checked = false; cb2.closest("tr").classList.remove("batch-active"); }
             } else if (d.status === "Analyzing" || d.status === "Converting" || d.status === "Tailoring") {
@@ -3133,6 +3142,7 @@
           clearInterval(batchPollInterval);
           batchPollInterval = null;
           batchRemainingJobs = null;
+          activeBatchId = null;
           batchStopBtn.classList.add("hidden");
           batchBody.querySelectorAll("tr.batch-active").forEach(function(tr) { tr.classList.remove("batch-active"); });
           activeBtn.textContent = label;
@@ -3149,6 +3159,11 @@
       // Refresh this row's data from server to update match%
       fetch("/store/" + storeId).then(function(r) { return r.json(); }).then(function(data) {
         var meta = data._meta || {};
+        // Update match_pct in batchData so sort/filter preserves it
+        if (meta.match_pct != null) {
+          var item = batchData.find(function(d) { return d.id === storeId; });
+          if (item) item.match_pct = meta.match_pct;
+        }
         var cb = batchBody.querySelector('input[data-id="' + storeId + '"]');
         if (!cb) return;
         var tr = cb.closest("tr");
@@ -3171,11 +3186,9 @@
     var batchStopBtn = document.getElementById("batchStopBtn");
     batchStopBtn.addEventListener("click", function() {
       batchCancelled = true;
-      // Cancel remaining jobs on server
-      if (batchRemainingJobs) {
-        batchRemainingJobs.forEach(function(sid, jid) {
-          fetch("/jobs/" + jid + "/cancel", { method: "POST" }).catch(function(){});
-        });
+      // Cancel entire batch on server with one request
+      if (activeBatchId) {
+        fetch("/batch/" + activeBatchId + "/cancel", { method: "POST" }).catch(function(){});
       }
       appLog("Batch stopped by user");
     });

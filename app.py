@@ -38,6 +38,7 @@ jobs = InMemoryJobStore()
 _SERVER_START = time.time()
 _JOB_SEMAPHORE = threading.Semaphore(10)  # max 10 concurrent LLM jobs
 _STORE_LOCK = threading.RLock()  # serialize store file writes (reentrant for nested calls)
+_batch_cancel_flags: dict[str, bool] = {}  # batch_id -> cancelled flag
 
 import re
 _STORE_ID_RE = re.compile(r'^[a-fA-F0-9]+$')
@@ -423,13 +424,17 @@ async def batch_store_action(request: Request):
                     pass
             todo_ids.append(sid)
 
+        # Create batch cancel flag
+        batch_id = f"batch_{int(time.time()*1000)}"
+        _batch_cancel_flags[batch_id] = False
+
         # Create jobs upfront (for frontend polling) but run sequentially
         created_jobs = []
         for sid in todo_ids:
             job = jobs.create(f"analyze_{sid[:8]}", anonymize=False, autofix=False, template_name="")
             created_jobs.append({"store_id": sid, "job_id": job.job_id})
 
-        # Launch all batch analyze jobs — semaphore limits concurrency to 5
+        # Launch all batch analyze jobs — semaphore limits concurrency
         for item in created_jobs:
             sid, jid = item["store_id"], item["job_id"]
             cv_json = _load_store_cv(sid)
@@ -437,11 +442,11 @@ async def batch_store_action(request: Request):
                 jobs.update(jid, status="Failed", progress=100, error="CV not found")
                 continue
             thread = threading.Thread(
-                target=_run_batch_analyze, args=(jid, sid, cv_json, jd_text), daemon=True
+                target=_run_batch_analyze, args=(jid, sid, cv_json, jd_text, batch_id), daemon=True
             )
             thread.start()
 
-        return {"ok": True, "jobs": created_jobs, "skipped": skipped}
+        return {"ok": True, "jobs": created_jobs, "skipped": skipped, "batch_id": batch_id}
 
     if action not in ("generate", "anonymize", "tailor"):
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
@@ -1118,18 +1123,21 @@ def _load_store_cv(store_id: str) -> dict | None:
     return data
 
 
-def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str) -> None:
+def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str, batch_id: str = "") -> None:
     """Lightweight batch analysis: gap analysis only, no DOCX generation."""
+    def _is_cancelled():
+        if batch_id and _batch_cancel_flags.get(batch_id):
+            return True
+        job = jobs.get(job_id)
+        return job and getattr(job, "_cancelled", False)
+
     # Wait for semaphore, checking cancel every second
     while not _JOB_SEMAPHORE.acquire(timeout=1):
-        job = jobs.get(job_id)
-        if job and getattr(job, "_cancelled", False):
+        if _is_cancelled():
             jobs.update(job_id, status="Cancelled", progress=100)
             return
     try:
-        # Check if cancelled after acquiring semaphore
-        job = jobs.get(job_id)
-        if job and getattr(job, "_cancelled", False):
+        if _is_cancelled():
             jobs.update(job_id, status="Cancelled", progress=100)
             return
 
@@ -1704,6 +1712,14 @@ async def cancel_job(job_id: str):
     # Mark as failed
     if job.status not in ("Done", "Failed"):
         jobs.update(job_id, status="Failed", progress=100, error="Cancelled by user")
+    return {"ok": True}
+
+
+@app.post("/batch/{batch_id}/cancel")
+async def cancel_batch(batch_id: str):
+    """Cancel all pending jobs in a batch."""
+    if batch_id in _batch_cancel_flags:
+        _batch_cancel_flags[batch_id] = True
     return {"ok": True}
 
 
