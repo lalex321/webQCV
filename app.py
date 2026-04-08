@@ -36,7 +36,7 @@ app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
-_JOB_SEMAPHORE = threading.Semaphore(5)  # max 5 concurrent LLM jobs
+_JOB_SEMAPHORE = threading.Semaphore(10)  # max 10 concurrent LLM jobs
 _STORE_LOCK = threading.RLock()  # serialize store file writes (reentrant for nested calls)
 
 import re

@@ -3082,6 +3082,7 @@
       batchBtns.generate.disabled = true;
       batchBtns.del.disabled = true;
       activeBtn.textContent = "0/" + total + "…";
+      var batchStartTime = Date.now();
       setStatus("Batch: 0/" + total, 0, "");
       statusBarFile.textContent = (actionName === "analyze" ? "Analyzing" : "Generating") + "…";
       // Show stop button
@@ -3117,8 +3118,17 @@
         }
         polling = false;
         var pct = Math.round((done + failed) / total * 100);
+        var processed = done + failed;
+        var etaStr = "";
+        if (processed > 0) {
+          var elapsed = (Date.now() - batchStartTime) / 1000;
+          var avg = elapsed / processed;
+          var remaining_sec = Math.round(avg * (total - processed));
+          var em = Math.floor(remaining_sec / 60), es = remaining_sec % 60;
+          etaStr = " | ETA " + em + "m" + (es < 10 ? "0" : "") + es + "s";
+        }
         activeBtn.textContent = done + "/" + total + "…";
-        setStatus("Batch: " + done + "/" + total, pct, "");
+        setStatus("Batch: " + done + "/" + total + etaStr, pct, "");
         if (!remaining.size || batchCancelled) {
           clearInterval(batchPollInterval);
           batchPollInterval = null;
