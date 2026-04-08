@@ -1185,8 +1185,8 @@
         progressBar.style.width = `${safeProgress}%`;
       }
 
-      // Show/hide stop button for active jobs
-      if (isActive && activeJobId) {
+      // Show/hide stop button for active jobs (hide during batch — batch has its own stop)
+      if (isActive && activeJobId && !batchPollInterval) {
         jobStopBtn.classList.remove("hidden");
       } else {
         jobStopBtn.classList.add("hidden");
