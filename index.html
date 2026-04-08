@@ -691,7 +691,7 @@
           <button id="batchImport" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">Import CVs</button>
           <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
-          <select id="batchJDSelect" class="prompt-select" style="max-width:200px"><option value="">— No JD filter —</option></select>
+          <select id="batchJDSelect" class="prompt-select" style="max-width:200px"><option value="">— No JD —</option></select>
           <select id="batchTemplate" class="prompt-select" style="max-width:130px"></select>
           <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#475569;margin:0"><input id="batchAnonymize" type="checkbox" /> Anonymize</label>
           <button id="batchAnalyze" class="batch-btn" disabled>Analyze</button>
@@ -903,6 +903,7 @@
     let preloadedFitJson = null;
     let jobRefined = false;
     let lastAnalyzedJd = "";
+    let convertJdOrigin = ""; // JD text loaded from store/dropdown — to detect user edits
     let lastSubmittedFile = null;
     let currentStoreId = null;
     let detailsLines = [];
@@ -1414,6 +1415,7 @@
             /* Auto-fill JD */
             if (fitSession.jd_text) {
               jdText.value = fitSession.jd_text;
+              convertJdOrigin = fitSession.jd_text;
               localStorage.setItem(STORAGE_KEYS.jd_text, fitSession.jd_text);
             }
             /* Auto-enable Tailor mode */
@@ -2203,6 +2205,26 @@
     jdText.addEventListener("blur", () => {
       jdText.classList.add("jd-collapsed");
       localStorage.setItem(STORAGE_KEYS.jd_text, jdText.value);
+      // Detect JD change — offer to save to JD Store
+      var currentJd = jdText.value.trim();
+      if (convertJdOrigin && currentJd && currentJd !== convertJdOrigin.trim()) {
+        convertJdOrigin = ""; // reset so we don't ask again
+        var save = confirm("You've modified the JD text. Matching will now use the new JD.\n\nSave this JD to the JD Store?");
+        if (save) {
+          fetch("/jd_store", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ text: currentJd })
+          }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.exists) {
+              appLog("JD already exists in store (#" + (data.item.number || "") + ")");
+            } else {
+              appLog("New JD saved to store: " + (data.item.title || "Untitled"));
+              if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
+            }
+          }).catch(function(e) { appLog("Failed to save JD: " + e, "error"); });
+        }
+      }
     });
     jdText.addEventListener("input", () => {
       var jdChanged = hasGapData && jdText.value !== lastAnalyzedJd;
@@ -2382,14 +2404,23 @@
       });
     }
 
+    function _setJDFieldsReadonly(readonly) {
+      // Title and Company always editable (no data loss)
+      document.getElementById("jdTitle").readOnly = false;
+      document.getElementById("jdCompany").readOnly = false;
+      document.getElementById("jdStoreText").readOnly = readonly;
+      document.getElementById("jdStoreText").style.opacity = readonly ? "0.75" : "1";
+    }
+
     function selectJD(jdId) {
-      if (jdDirty && jdSelectedId && jdSelectedId !== jdId) {
-        if (!confirm("Discard unsaved changes?")) return;
+      if (jdDirty && !jdSelectedId) {
+        if (!confirm("Discard unsaved new JD?")) return;
       }
       jdSelectedId = jdId;
       jdDirty = false;
       document.getElementById("jdSaveBtn").disabled = true;
       document.getElementById("jdDeleteBtn").disabled = false;
+      _setJDFieldsReadonly(true);
       // Highlight row
       document.querySelectorAll("#jdBody tr").forEach(function(tr) { tr.classList.remove("selected"); });
       var rows = document.querySelectorAll("#jdBody tr");
@@ -2408,16 +2439,20 @@
     }
 
     // Track changes
-    ["jdTitle", "jdCompany", "jdStoreText"].forEach(function(id) {
+    ["jdTitle", "jdCompany"].forEach(function(id) {
       document.getElementById(id).addEventListener("input", function() {
-        if (jdSelectedId) {
-          jdDirty = true;
-          document.getElementById("jdSaveBtn").disabled = false;
-        }
+        jdDirty = true;
+        document.getElementById("jdSaveBtn").disabled = false;
       });
     });
+    document.getElementById("jdStoreText").addEventListener("input", function() {
+      if (!jdSelectedId) {
+        jdDirty = true;
+        document.getElementById("jdSaveBtn").disabled = false;
+      }
+    });
 
-    // + New JD — just clears fields
+    // + New JD — clears fields and enables editing
     document.getElementById("jdAddBtn").addEventListener("click", function() {
       jdSelectedId = null;
       jdDirty = false;
@@ -2426,69 +2461,72 @@
       document.getElementById("jdStoreText").value = "";
       document.getElementById("jdSaveBtn").disabled = false;
       document.getElementById("jdDeleteBtn").disabled = true;
+      _setJDFieldsReadonly(false);
       document.querySelectorAll("#jdBody tr").forEach(function(tr) { tr.classList.remove("selected"); });
       document.getElementById("jdStoreText").focus();
     });
 
-    // Save — creates new JD or updates existing
+    // Save — creates new JD or updates title/company on existing
     document.getElementById("jdSaveBtn").addEventListener("click", function() {
+      var title = document.getElementById("jdTitle").value.trim();
+      var company = document.getElementById("jdCompany").value.trim();
+
+      if (jdSelectedId) {
+        // Update title/company only (text is read-only)
+        fetch("/jd_store/" + jdSelectedId, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ title: title, company: company, text: document.getElementById("jdStoreText").value.trim() })
+        }).then(r => r.json()).then(function(data) {
+          jdDirty = false;
+          document.getElementById("jdSaveBtn").disabled = true;
+          for (var i = 0; i < jdItems.length; i++) {
+            if (jdItems[i].id === jdSelectedId) {
+              jdItems[i].title = data.item.title;
+              jdItems[i].company = data.item.company;
+              break;
+            }
+          }
+          renderJDTable();
+          if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
+        });
+        return;
+      }
+
+      // Create new
       var text = document.getElementById("jdStoreText").value.trim();
       if (!text) {
         document.getElementById("jdStoreText").focus();
         return;
       }
-      var title = document.getElementById("jdTitle").value.trim();
-      var company = document.getElementById("jdCompany").value.trim();
-
-      if (!jdSelectedId) {
-        // Create new
-        fetch("/jd_store", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({text: text, title: title || undefined, company: company || undefined})
-        }).then(r => r.json()).then(function(data) {
-          if (data.exists) {
-            alert("This JD already exists (#" + data.item.number + ")");
-            selectJD(data.id);
-          } else {
-            jdItems.push(data.item);
-            renderJDTable();
-            selectJD(data.id);
-            // Refresh dropdown in Database tab
-            if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
-          }
-        });
-        return;
-      }
-
-      // Update existing
-      fetch("/jd_store/" + jdSelectedId, {
-        method: "PUT",
+      fetch("/jd_store", {
+        method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          title: document.getElementById("jdTitle").value.trim(),
-          company: document.getElementById("jdCompany").value.trim(),
-          text: document.getElementById("jdStoreText").value.trim()
-        })
+        body: JSON.stringify({text: text, title: title || undefined, company: company || undefined})
       }).then(r => r.json()).then(function(data) {
-        jdDirty = false;
-        document.getElementById("jdSaveBtn").disabled = true;
-        // Update cache
-        for (var i = 0; i < jdItems.length; i++) {
-          if (jdItems[i].id === jdSelectedId) {
-            jdItems[i].title = data.item.title;
-            jdItems[i].company = data.item.company;
-            break;
-          }
+        if (data.exists) {
+          alert("This JD already exists (#" + data.item.number + ")");
+          selectJD(data.id);
+        } else {
+          jdItems.push(data.item);
+          renderJDTable();
+          selectJD(data.id);
+          if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
         }
-        renderJDTable();
       });
     });
 
-    // Delete
+    // Delete — with warning about losing analysis data
     document.getElementById("jdDeleteBtn").addEventListener("click", function() {
       if (!jdSelectedId) return;
-      if (!confirm("Delete this JD?")) return;
+      var jd = jdItems.find(function(j) { return j.id === jdSelectedId; });
+      var title = jd ? (jd.title || "Untitled") : "this JD";
+      var candidates = jd ? (jd.candidates || 0) : 0;
+      var msg = 'Delete "' + title + '"?';
+      if (candidates > 0) {
+        msg += "\n\nThis will also remove gap analysis results for " + candidates + " candidate(s). This analysis data cannot be recovered.";
+      }
+      if (!confirm(msg)) return;
       fetch("/jd_store/" + jdSelectedId, {method: "DELETE"}).then(r => r.json()).then(function() {
         jdItems = jdItems.filter(function(j) { return j.id !== jdSelectedId; });
         jdSelectedId = null;
@@ -2498,7 +2536,9 @@
         document.getElementById("jdStoreText").value = "";
         document.getElementById("jdSaveBtn").disabled = true;
         document.getElementById("jdDeleteBtn").disabled = true;
+        _setJDFieldsReadonly(false);
         renderJDTable();
+        if (typeof loadBatchJDDropdown === "function") loadBatchJDDropdown();
       });
     });
 
@@ -2621,7 +2661,7 @@
       if (!q) { batchFiltered = batchData.slice(); batchSort(); return; }
       var tokens = q.split(/\s+/);
       batchFiltered = batchData.filter(function(m) {
-        var txt = m.search_text || (m.name + " " + m.role + " " + m.company).toLowerCase();
+        var txt = (m.search_text || (m.name + " " + m.role + " " + m.company).toLowerCase()) + " " + (m.comments || "").toLowerCase();
         return tokens.every(function(t) { return txt.indexOf(t) >= 0; });
       });
       batchSort();
@@ -2912,7 +2952,7 @@
       try {
         var r = await fetch("/jd_store");
         var data = await r.json();
-        // Keep first option "— No JD filter —"
+        // Keep first option "— No JD —"
         while (batchJDSelect.options.length > 1) batchJDSelect.remove(1);
         (data.items || []).forEach(function(jd) {
           var o = document.createElement("option");
@@ -3076,6 +3116,8 @@
     var activeBatchId = null; // server-side batch cancel flag
 
     function pollBatchJobs(jobMap, autoDownload, actionName) {
+      // Kill any orphaned interval from previous batch
+      if (batchPollInterval) { clearInterval(batchPollInterval); batchPollInterval = null; }
       // jobMap: [{store_id, job_id}, ...]
       var remaining = new Map(jobMap.map(function(j) { return [j.job_id, j.store_id]; }));
       batchRemainingJobs = remaining;
@@ -3086,6 +3128,7 @@
       batchBtns.analyze.disabled = true;
       batchBtns.generate.disabled = true;
       batchBtns.del.disabled = true;
+      batchJDSelect.disabled = true;
       activeBtn.textContent = "0/" + total + "…";
       var batchStartTime = Date.now();
       setStatus("Batch: 0/" + total, 0, "");
@@ -3146,6 +3189,7 @@
           batchStopBtn.classList.add("hidden");
           batchBody.querySelectorAll("tr.batch-active").forEach(function(tr) { tr.classList.remove("batch-active"); });
           activeBtn.textContent = label;
+          batchJDSelect.disabled = false;
           updateBatchBtns();
           setStatus("Ready", 0, "");
           statusBarFile.textContent = "";
@@ -3190,7 +3234,21 @@
       if (activeBatchId) {
         fetch("/batch/" + activeBatchId + "/cancel", { method: "POST" }).catch(function(){});
       }
+      // Clear polling interval immediately (don't wait for next tick)
+      if (batchPollInterval) { clearInterval(batchPollInterval); batchPollInterval = null; }
+      batchRemainingJobs = null;
+      activeBatchId = null;
+      batchStopBtn.classList.add("hidden");
+      batchBody.querySelectorAll("tr.batch-active").forEach(function(tr) { tr.classList.remove("batch-active"); });
+      var activeBtn = batchBtns.analyze; // reset whichever was active
+      batchBtns.analyze.textContent = "Analyze";
+      batchBtns.generate.textContent = "Generate";
+      batchJDSelect.disabled = false;
+      updateBatchBtns();
+      setStatus("Ready", 0, "");
+      statusBarFile.textContent = "";
       appLog("Batch stopped by user");
+      loadBatchStore();
     });
 
     batchBtns.analyze.addEventListener("click", async function() {
@@ -3289,7 +3347,7 @@
 
         // Build CV JSON (strip _meta and _tailor_session)
         var cv = {};
-        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session" && k !== "_gap_session") cv[k] = data[k]; }
+        for (var k in data) { if (k !== "_meta" && k !== "_tailor_session" && k !== "_gap_session" && k !== "_gap_sessions") cv[k] = data[k]; }
 
         currentStoreId = storeId;
 
@@ -3308,6 +3366,23 @@
         setPrimaryAction("idle");
         errorText.textContent = "";
         statusValue.textContent = "Ready"; progressBar.style.width = "0%";
+
+        // Pre-fill JD from Database dropdown if selected
+        var selJdId = batchJDSelect.value;
+        if (selJdId) {
+          try {
+            var jr = await fetch("/jd_store/" + selJdId);
+            var jdData = await jr.json();
+            if (jdData.text) {
+              tailorInput.checked = true;
+              jdField.classList.remove("hidden");
+              document.getElementById("pageRoot").classList.add("tailor-mode");
+              jdText.value = jdData.text;
+              convertJdOrigin = jdData.text;
+              savePrefs();
+            }
+          } catch(e) {}
+        }
 
         // Load CV into editor
         cvData = cv;
@@ -3339,10 +3414,18 @@
         var r = await fetch("/store/" + storeId);
         if (!r.ok) { alert("Failed to load stored CV"); return; }
         var data = await r.json();
-        var session = data._tailor_session || data._gap_session;
+
+        // Find best session: prefer gap_sessions[current JD] > _tailor_session > _gap_session
+        var selJdId = batchJDSelect.value;
+        var gapSessions = data._gap_sessions || {};
+        var session = null;
+        if (selJdId && gapSessions[selJdId]) {
+          session = gapSessions[selJdId];
+        }
+        if (!session) session = data._tailor_session || data._gap_session;
         if (!session) { alert("No tailoring data for this CV"); return; }
 
-        // Best gap_analysis: prefer tailor_session, fallback to gap_session
+        // Best gap_analysis: prefer current session, fallback to gap_session
         var gapData = session.gap_analysis;
         if ((!gapData || !gapData.match_percentage) && data._gap_session && data._gap_session.gap_analysis) {
           gapData = data._gap_session.gap_analysis;
@@ -3368,11 +3451,21 @@
         statusBarFile.textContent = data._meta && data._meta.name || "";
         setPrimaryAction("idle");
 
-        // Enable tailor mode and fill JD
+        // Enable tailor mode and fill JD from Database dropdown (or session fallback)
         tailorInput.checked = true;
         jdField.classList.remove("hidden");
         document.getElementById("pageRoot").classList.add("tailor-mode");
-        jdText.value = session.jd_text || "";
+        if (selJdId) {
+          try {
+            var jr = await fetch("/jd_store/" + selJdId);
+            var jdData = await jr.json();
+            jdText.value = jdData.text || session.jd_text || "";
+            convertJdOrigin = jdText.value;
+          } catch(e) { jdText.value = session.jd_text || ""; convertJdOrigin = jdText.value; }
+        } else {
+          jdText.value = session.jd_text || "";
+          convertJdOrigin = jdText.value;
+        }
         savePrefs();
 
         // Set up preloaded state so form submit sends JSON with skip_gap

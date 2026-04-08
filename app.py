@@ -299,6 +299,11 @@ def reset_prompt(key: str):
 @app.get("/store")
 def list_store(jd_id: str = ""):
     items = _list_store()
+    if not jd_id:
+        # No JD selected — clear all match_pct
+        for m in items:
+            m["match_pct"] = None
+        return {"items": items}
     if jd_id:
         # Override match_pct with score for specific JD
         for m in items:
