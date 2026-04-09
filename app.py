@@ -1591,7 +1591,7 @@ def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str, 
         _JOB_SEMAPHORE.release()
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None) -> None:
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None, user_email: str = "anonymous") -> None:
     jobs.update(job_id, status="Queued", progress=0)
     _JOB_SEMAPHORE.acquire()
     try:
@@ -1749,6 +1749,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "event": "done",
             "job_id": job_id,
             "ip": client_ip,
+            "user": user_email,
             "file": source_path.name,
             "template": template_name,
             "anonymize": anonymize,
@@ -1760,7 +1761,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
         jobs.update(job_id, status="Low Relevance", progress=100, error=str(e))
         append_usage({
             "event": "skipped_low_relevance",
-            "job_id": job_id, "ip": client_ip,
+            "job_id": job_id, "ip": client_ip, "user": user_email,
             "file": source_path.name, "tailor": True,
             "duration_sec": round(time.time() - started_at, 2),
         })
@@ -1770,6 +1771,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "event": "failed",
             "job_id": job_id,
             "ip": client_ip,
+            "user": user_email,
             "file": source_path.name,
             "template": template_name,
             "anonymize": anonymize,
@@ -1874,11 +1876,15 @@ async def create_job(
     setattr(job, "details", details)
 
     client_ip = request.client.host if request.client else "unknown"
+    user = _auth.get_current_user(request)
+    user_email = user["email"] if user else "anonymous"
+    setattr(job, "_user_email", user_email)
     started_at = time.time()
     append_usage({
         "event": "started",
         "job_id": job.job_id,
         "ip": client_ip,
+        "user": user_email,
         "file": source_path.name,
         "template": template_name,
         "anonymize": anonymize,
@@ -1894,6 +1900,7 @@ async def create_job(
             "preloaded_focus_skills": json.loads(focus_skills_json) if focus_skills_json else None,
             "preloaded_data": preloaded_data,
             "preloaded_gap": fit_session.get("gap_analysis") if fit_session else None,
+            "user_email": user_email,
         },
         daemon=True,
     )
