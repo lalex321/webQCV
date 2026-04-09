@@ -2,7 +2,15 @@ services:
   - type: web
     name: webqcv
     runtime: docker
-    plan: free
+    plan: starter
+    disk:
+      name: qcv-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: GEMINI_API_KEY
         sync: false
+      - key: DATA_DIR
+        value: /data
+      - key: SESSION_SECRET
+        generateValue: true
