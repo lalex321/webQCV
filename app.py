@@ -1300,7 +1300,7 @@ def _store_cache_init():
 def _store_cache_refresh():
     """Pick up new/changed store files (e.g. by employee_scanner or gap analysis)."""
     with _STORE_LOCK:
-        cached_map = {m.get("id"): m for m in _store_cache}
+        cached_map = {m.get("id"): m for m in (_store_cache or [])}
         changed = 0
         for p in STORE_DIR.glob("*.json"):
             try:
@@ -1538,7 +1538,7 @@ def _list_store() -> list[dict]:
         _store_cache_last_refresh = now
         _store_cache_refresh()
     with _STORE_LOCK:
-        return sorted(list(_store_cache), key=lambda m: m.get("date", ""), reverse=True)
+        return sorted(list(_store_cache or []), key=lambda m: m.get("date", ""), reverse=True)
 
 
 def _load_store_cv(store_id: str) -> dict | None:
