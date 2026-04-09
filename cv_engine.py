@@ -259,21 +259,7 @@ DEFAULT_PROMPTS = {
 1. **US ENGLISH ONLY:** All human-readable output in the JSON must be translated into professional US English. Do not leave Russian or other non-English prose in the output.
 2. **NO INVENTED FACTS / NO DATA LOSS:** Extract only facts supported by the CV, but do not lose explicit information. Preserve meaningful technical terms, methods, tools, technologies, responsibilities, achievements, project details, and bullet points. **HIGHLIGHTS INTEGRITY:** Each item in a role's `highlights` array MUST correspond to an actual bullet point, responsibility, or achievement explicitly written in the source CV for that role. NEVER generate, rephrase into new meaning, or fabricate highlights. Do NOT synthesize new highlights by combining, splitting, or inferring from project descriptions, environment lists, or other context. If a role has no bullets or descriptions in the source, return an empty `highlights: []`. **SUMMARY INTEGRITY:** The `summary.bullet_points` array MUST contain only items that appear in the original Summary/Profile/About section of the CV. Do NOT synthesize, infer, or generate new summary points from experience, skills, or other sections. If the CV has no summary section, return an empty array.
 3. **DEEP SCAN THE ENTIRE CV:** Extract from the whole document, including header, summary, skills blocks, Top Skills, experience bullets, project descriptions, certifications, languages, links, and side sections.
-4. **SKILLS — VERBATIM COPY (ZERO TOLERANCE, THIS IS THE #1 FAILURE MODE):**
-   STEP 1: Locate the CV's "Technical Skills" / "Skills" / "Core Competencies" section.
-   STEP 2: Copy it VERBATIM into the `skills` JSON — same category names, same items, same order.
-   STEP 3: STOP. Do NOT touch skills again. Do NOT "enrich" or "consolidate" skills from experience sections.
-
-   VIOLATIONS THAT WILL BE REJECTED:
-   - Adding ANY item not listed in the original Skills section (e.g. adding "Java" from an experience environment)
-   - Creating new categories (e.g. "Web Technologies", "Operating Systems") that don't exist in the original
-   - Merging categories (e.g. combining "Databases" and "Query languages" into "Databases & Query Languages")
-   - Renaming categories (e.g. "Programming languages" → "Programming Languages")
-   - Adding items from Environment/Technical Environment lines
-
-   If the original has 10 skill categories → output EXACTLY 10. If it has 5 items in a category → output EXACTLY 5.
-
-   **ENVIRONMENT FIELDS — ALSO VERBATIM:** Each role's `environment` must be the EXACT text from that role's "Environment" / "Technical Environment" line. Do NOT add items from highlights or descriptions.
+4. **SKILLS & ENVIRONMENT — STRICT MIRROR RULE:** The `skills` JSON object MUST mirror the CV's dedicated "Technical Skills" / "Skills" section — same categories, same items, same grouping. Do not add items from role environments. Do not create new categories. Role `environment` fields must copy the corresponding Environment lines in each role.
 5. **DATES & CURRENT STATUS:** Extract all explicit dates from ALL sections including education, preserving the highest precision supported by the source (`April 2025`, `2018`, `Present`). Education years (e.g. `2012 - 2016`) MUST go into `education[].year`. If only a duration is available with no start/end dates (e.g. `6 years 5 months`), place it in `dates.start` and leave `dates.end` empty. Never invent dates. Never assign future dates to finished past roles.
 6. **CONTACTS, LINKS, LOCATIONS:** Extract all explicit phone numbers, emails, LinkedIn, GitHub, portfolio, websites, WhatsApp, and other links, plus the most granular explicit location. Do not infer location from vague context or company headquarters. **SOCIAL HANDLES:** If the CV shows a username/handle next to a social-media icon (LinkedIn, GitHub, etc.) without a full URL, reconstruct the full URL: `https://linkedin.com/in/<handle>`, `https://github.com/<handle>`, etc. Never store a bare handle like `https://username` — always include the platform domain.
 7. **WORK EXPERIENCE INTEGRITY:** Merge all employment history into the single `experience` array, even if the CV splits it into multiple employment sections. Preserve explicit company, role title, dates, location, highlights, responsibilities, achievements, project details, and environment. Do not split one role unless clearly shown. Do not duplicate roles. Do not confuse role title with company name. If a role has only a duration (e.g. `6 years 5 months`) but no start/end dates, put the duration string into `dates.start` and leave `dates.end` as `""`.
@@ -290,8 +276,8 @@ DEFAULT_PROMPTS = {
 - every highlight in each role traces back to an actual bullet point in the source CV for that role (not inferred from project description or environment)
 - every summary bullet traces back to an actual line in the original Summary/Profile section (not synthesized from experience)
 - no `None` or `null` appears
-- skills section matches ONLY the original Skills/Technical Skills section — no items merged from role environments. Count the categories: if original has N, output must have exactly N.
-- role environment fields match ONLY the original Environment lines for each role — no additions from highlights or descriptions
+- skills section matches the original Skills/Technical Skills section
+- role environment fields match the original Environment lines for each role
 - dates are preserved exactly as supported by the source; duration-only entries (e.g. `6 years 5 months`) are in `dates.start`
 - no core content leaked into `other_sections`
 - all remaining non-core content is preserved in `other_sections`
@@ -2068,6 +2054,12 @@ def _format_docx_sections_for_llm(baseline: dict) -> str:
         "languages": "LANGUAGES",
     }
     parts = []
+    # Ensure CV header (name + title) from first heading is included
+    blocks = baseline.get("blocks", [])
+    if blocks:
+        first_heading = next((b["text"] for b in blocks if b.get("text", "").strip() and "heading" in b.get("style", "").lower()), "")
+        if first_heading:
+            parts.append(f"=== CV HEADER ===\n{first_heading}")
     for key, label in section_labels.items():
         lines = sections.get(key, [])
         if lines:
