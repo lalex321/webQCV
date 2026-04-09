@@ -346,7 +346,8 @@ async def gemini_proxy_upload(request: Request, path: str):
 
 
 @app.get("/admin/usage", response_class=HTMLResponse)
-def admin_usage():
+def admin_usage(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
     events = _read_usage_events()
     total_jobs = sum(1 for e in events if e.get("event") == "started")
     done_jobs = sum(1 for e in events if e.get("event") == "done")
@@ -435,7 +436,8 @@ def admin_usage():
 
 
 @app.get("/admin/prompts")
-def get_prompts():
+def get_prompts(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
     cfg = _core.load_config()
     prompts = {k: cfg[k] for k in cfg if k.startswith("prompt_")}
     defaults = dict(_core.DEFAULT_PROMPTS)
@@ -444,6 +446,7 @@ def get_prompts():
 
 @app.put("/admin/prompts/{key}")
 async def save_prompt(key: str, request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
     if not key.startswith("prompt_"):
         raise HTTPException(status_code=400, detail="Invalid prompt key")
     body = await request.json()
@@ -454,7 +457,8 @@ async def save_prompt(key: str, request: Request):
 
 
 @app.delete("/admin/prompts/{key}")
-def reset_prompt(key: str):
+def reset_prompt(key: str, request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
     if key not in _core.DEFAULT_PROMPTS:
         raise HTTPException(status_code=404, detail="Unknown prompt key")
     cfg = _core.load_config()
@@ -466,7 +470,8 @@ def reset_prompt(key: str):
 ## ── Store endpoints (Batch tab) ──────────────────────────────────────
 
 @app.get("/store")
-def list_store(jd_id: str = ""):
+def list_store(request: Request, jd_id: str = ""):
+    _auth.require_auth(request)
     items = _list_store()
     # Compute fast_match via embeddings if JD selected and embeddings available
     fast_scores: dict[str, int] = {}
@@ -557,8 +562,9 @@ def list_store(jd_id: str = ""):
 
 
 @app.post("/store/reindex_embeddings")
-async def reindex_embeddings():
+async def reindex_embeddings(request: Request):
     """Recompute embeddings for all CVs missing from cache. Returns progress."""
+    _auth.require_auth(request)
     missing = []
     for p in STORE_DIR.glob("*.json"):
         sid = p.stem
@@ -589,8 +595,9 @@ async def reindex_embeddings():
 
 
 @app.get("/store/embedding_stats")
-def embedding_stats():
+def embedding_stats(request: Request):
     """Return embedding cache stats."""
+    _auth.require_auth(request)
     store_count = len(list(STORE_DIR.glob("*.json")))
     return {
         "store_count": store_count,
@@ -601,8 +608,9 @@ def embedding_stats():
 
 
 @app.get("/store/{store_id}")
-def get_store_item(store_id: str):
+def get_store_item(store_id: str, request: Request):
     """Return full stored CV including tailor session if present."""
+    _auth.require_auth(request)
     _validate_store_id(store_id)
     p = STORE_DIR / f"{store_id}.json"
     if not p.exists():
@@ -612,7 +620,8 @@ def get_store_item(store_id: str):
 
 
 @app.delete("/store/{store_id}")
-def delete_store_item(store_id: str):
+def delete_store_item(store_id: str, request: Request):
+    _auth.require_auth(request)
     _validate_store_id(store_id)
     p = STORE_DIR / f"{store_id}.json"
     if not p.exists():
@@ -626,6 +635,7 @@ _EDITABLE_META_FIELDS = {"comments"}
 
 @app.patch("/store/{store_id}/meta")
 async def update_store_meta(store_id: str, request: Request):
+    _auth.require_auth(request)
     _validate_store_id(store_id)
     body = await request.json()
     field = body.get("field", "")
@@ -647,6 +657,7 @@ async def update_store_meta(store_id: str, request: Request):
 
 @app.post("/store/batch")
 async def batch_store_action(request: Request):
+    _auth.require_role(_auth.ADMIN, _auth.USER)(request)
     body = await request.json()
     action = body.get("action")
     ids = body.get("ids", [])
@@ -777,7 +788,8 @@ def _resolve_github_token(cfg: dict) -> str:
 
 
 @app.get("/setup", response_class=HTMLResponse)
-def setup_page():
+def setup_page(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
     cfg = _core.load_config()
     current_key = resolve_api_key(APP_DIR, cfg)
     key_source = "not set"
@@ -861,10 +873,12 @@ def setup_page():
 
 @app.post("/setup")
 async def setup_save(
+    request: Request,
     api_key: str = Form(None),
     github_token: str = Form(None),
     field: str = Form("gemini"),
 ):
+    _auth.require_role(_auth.ADMIN)(request)
     if field == "github" and github_token:
         token = github_token.strip()
         if not token:
@@ -995,6 +1009,9 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
             target.mkdir(parents=True, exist_ok=True)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Validate path doesn't escape DATA_DIR
+            if not str(target.resolve()).startswith(str(DATA_DIR.resolve())):
+                continue
             target.write_bytes(zf.read(name))
             extracted += 1
     # Reload caches
@@ -1086,7 +1103,8 @@ def _jd_auto_company(text: str) -> str:
 
 
 @app.get("/jd_store")
-def list_jd_store():
+def list_jd_store(request: Request):
+    _auth.require_auth(request)
     if not _jd_cache_ready:
         _jd_cache_init()
     # Count candidates per JD from store cache
@@ -1119,7 +1137,8 @@ def list_jd_store():
 
 
 @app.get("/jd_store/{jd_id}")
-def get_jd_item(jd_id: str):
+def get_jd_item(jd_id: str, request: Request):
+    _auth.require_auth(request)
     _validate_store_id(jd_id)
     p = JD_STORE_DIR / f"{jd_id}.json"
     if not p.exists():
@@ -1129,6 +1148,7 @@ def get_jd_item(jd_id: str):
 
 @app.post("/jd_store")
 async def create_jd(request: Request):
+    _auth.require_auth(request)
     body = await request.json()
     text = body.get("text", "").strip()
     if not text:
@@ -1166,6 +1186,7 @@ async def create_jd(request: Request):
 
 @app.put("/jd_store/{jd_id}")
 async def update_jd(jd_id: str, request: Request):
+    _auth.require_auth(request)
     _validate_store_id(jd_id)
     body = await request.json()
 
@@ -1193,7 +1214,8 @@ async def update_jd(jd_id: str, request: Request):
 
 
 @app.delete("/jd_store/{jd_id}")
-def delete_jd(jd_id: str):
+def delete_jd(jd_id: str, request: Request):
+    _auth.require_auth(request)
     _validate_store_id(jd_id)
     with _JD_LOCK:
         p = JD_STORE_DIR / f"{jd_id}.json"
@@ -1205,7 +1227,8 @@ def delete_jd(jd_id: str):
 
 
 @app.get("/stats")
-def server_stats():
+def server_stats(request: Request):
+    _auth.require_auth(request)
     today = time.strftime("%Y-%m-%d")
     events = _read_usage_events()
     today_done = sum(1 for e in events if e.get("event") == "done" and e.get("ts", "").startswith(today))
@@ -1225,7 +1248,8 @@ def server_stats():
 
 
 @app.get("/templates")
-def list_templates():
+def list_templates(request: Request):
+    _auth.require_auth(request)
     if not TEMPLATES_DIR.exists():
         return {"templates": []}
     names = sorted([p.name for p in TEMPLATES_DIR.glob("*.docx") if p.is_file()])
@@ -1799,6 +1823,7 @@ async def create_job(
     import_only: bool = Form(False),
     store_id: str = Form(""),
 ):
+    _auth.require_auth(request)
     suffix = Path(file.filename or "upload.docx").suffix.lower()
     if suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".json"}:
         raise HTTPException(status_code=400, detail="Only PDF, DOCX, PNG, JPG, JPEG, and JSON are supported.")
@@ -1917,7 +1942,8 @@ async def create_job(
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, request: Request):
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1939,8 +1965,9 @@ def get_job(job_id: str):
 
 
 @app.get("/jobs/{job_id}/cv_json")
-def get_cv_json(job_id: str):
+def get_cv_json(job_id: str, request: Request):
     """Return the extracted base CV JSON for this job."""
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1953,6 +1980,7 @@ def get_cv_json(job_id: str):
 @app.put("/jobs/{job_id}/cv_json")
 async def update_cv_json(job_id: str, request: Request):
     """Update the base CV JSON for this job (from the editor)."""
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1970,6 +1998,7 @@ async def update_cv_json(job_id: str, request: Request):
 @app.post("/jobs/{job_id}/reanalyze")
 async def reanalyze_job(job_id: str, request: Request):
     """Re-run gap analysis on the (possibly edited) CV JSON."""
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2003,7 +2032,8 @@ async def reanalyze_job(job_id: str, request: Request):
 
 
 @app.get("/jobs/{job_id}/download")
-def download_job_result(job_id: str):
+def download_job_result(job_id: str, request: Request):
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2069,6 +2099,7 @@ def _run_refine(job_id: str, tailored_json: dict, jd_text: str, missing_keywords
 
 @app.post("/jobs/{job_id}/refine")
 async def refine_job(job_id: str, request: Request):
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2110,6 +2141,7 @@ async def refine_job(job_id: str, request: Request):
 @app.post("/jobs/{job_id}/continue")
 async def continue_job(job_id: str, request: Request):
     """Unblock a job paused at gap_analysis_ready to proceed with tailoring."""
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2133,8 +2165,9 @@ async def continue_job(job_id: str, request: Request):
 
 
 @app.post("/jobs/{job_id}/cancel")
-async def cancel_job(job_id: str):
+async def cancel_job(job_id: str, request: Request):
     """Cancel a pending job — unblocks pause_event so the thread can exit."""
+    _auth.require_auth(request)
     job = jobs.get(job_id)
     if not job:
         return {"ok": True}  # already gone
@@ -2151,8 +2184,9 @@ async def cancel_job(job_id: str):
 
 
 @app.post("/batch/{batch_id}/cancel")
-async def cancel_batch(batch_id: str):
+async def cancel_batch(batch_id: str, request: Request):
     """Cancel all pending jobs in a batch."""
+    _auth.require_auth(request)
     if batch_id in _batch_cancel_flags:
         _batch_cancel_flags[batch_id] = True
     return {"ok": True}
@@ -2161,6 +2195,7 @@ async def cancel_batch(batch_id: str):
 @app.post("/xray")
 async def xray_search(request: Request):
     """Generate X-Ray Boolean search queries from a candidate description."""
+    _auth.require_auth(request)
     body = await request.json()
     user_input = (body.get("query") or "").strip()
     if len(user_input) < 5:
@@ -2209,6 +2244,7 @@ def _gh_get(endpoint: str, token: str) -> dict | list | None:
 @app.post("/github/mine")
 async def github_mine(request: Request):
     """Search GitHub repos by keywords, extract contributors, return candidate profiles."""
+    _auth.require_auth(request)
     body = await request.json()
     keywords = (body.get("keywords") or "").strip()
     location = (body.get("location") or "").strip().lower()
@@ -2266,6 +2302,7 @@ async def github_mine(request: Request):
 @app.post("/github/import")
 async def github_import(request: Request):
     """Import a GitHub profile: fetch repos, LLM→CV JSON, save to store."""
+    _auth.require_auth(request)
     body = await request.json()
     login = (body.get("login") or "").strip()
     if not login:
