@@ -973,6 +973,67 @@ def admin_users_page(request: Request):
     return RawResponse(content=p.read_bytes(), media_type="text/html")
 
 
+@app.post("/admin/upload_data")
+async def admin_upload_data(request: Request, file: UploadFile = File(...)):
+    """Upload a zip archive to restore _store/, _jd_store/, _cache/ into DATA_DIR."""
+    _auth.require_role(_auth.ADMIN)(request)
+    import zipfile, io
+    content = await file.read()
+    if len(content) > 500 * 1024 * 1024:  # 500MB limit
+        raise HTTPException(400, "File too large (max 500MB)")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Invalid zip file")
+    extracted = 0
+    for name in zf.namelist():
+        # Only allow known directories
+        if not any(name.startswith(p) for p in ("_store/", "_jd_store/", "_cache/", "_users.json")):
+            continue
+        target = DATA_DIR / name
+        if name.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(name))
+            extracted += 1
+    # Reload caches
+    global _embed_ids, _embed_matrix, _store_cache
+    _load_embed_cache()
+    _store_cache = None  # force reload on next access
+    return {"ok": True, "extracted": extracted}
+
+
+@app.get("/admin/upload_data", response_class=HTMLResponse)
+def admin_upload_page(request: Request):
+    """Simple upload form for data restore."""
+    _auth.require_role(_auth.ADMIN)(request)
+    return RawResponse(content=b"""<!DOCTYPE html>
+<html><head><title>Upload Data</title>
+<style>body{font-family:sans-serif;padding:24px}h1{font-size:20px}.msg{margin-top:12px;font-size:14px}</style>
+</head><body>
+<h1>Upload Data Archive</h1>
+<p style="color:#64748b;font-size:13px">Upload a .zip containing _store/, _jd_store/, _cache/ folders.</p>
+<form id="f"><input type="file" name="file" accept=".zip" required>
+<button type="submit" style="padding:8px 16px;margin-left:8px">Upload</button></form>
+<div class="msg" id="msg"></div>
+<p style="margin-top:16px"><a href="/">Back to app</a></p>
+<script>
+document.getElementById("f").addEventListener("submit", async function(e) {
+  e.preventDefault();
+  var fd = new FormData(this);
+  document.getElementById("msg").textContent = "Uploading...";
+  try {
+    var r = await fetch("/admin/upload_data", {method:"POST", body: fd});
+    var d = await r.json();
+    document.getElementById("msg").textContent = r.ok
+      ? "Done! Extracted " + d.extracted + " files."
+      : "Error: " + (d.detail || "unknown");
+  } catch(ex) { document.getElementById("msg").textContent = "Error: " + ex; }
+});
+</script></body></html>""", media_type="text/html")
+
+
 # ── JD Store ──────────────────────────────────────────────────────────────────
 
 _JD_LOCK = threading.Lock()
