@@ -2612,12 +2612,14 @@
 
     /* ── Batch Tab ── */
     const BATCH_COLS_DEFAULT = [
-      { key: "name", label: "Name", width: 18 },
-      { key: "match_pct", label: "Match", width: 6 },
-      { key: "role", label: "Role", width: 18 },
-      { key: "company", label: "Company", width: 14 },
-      { key: "source_filename", label: "File", width: 14 },
-      { key: "comments", label: "Comments", editable: true, width: 20 },
+      { key: "name", label: "Name", width: 15 },
+      { key: "fast_match", label: "Fast", width: 4, hiddenByDefault: true },
+      { key: "key_match", label: "Keys", width: 4, hiddenByDefault: true },
+      { key: "match_pct", label: "Match", width: 5 },
+      { key: "role", label: "Role", width: 16 },
+      { key: "company", label: "Company", width: 12 },
+      { key: "source_filename", label: "File", width: 12 },
+      { key: "comments", label: "Comments", editable: true, width: 18 },
       { key: "date", label: "Date", tooltip: "Last updated", width: 10 },
     ];
     var batchCols = (function() {
@@ -2671,7 +2673,7 @@
       var col = batchSortCol, asc = batchSortAsc;
       batchFiltered.sort(function(a, b) {
         var va = a[col], vb = b[col];
-        if (col === "match_pct") {
+        if (col === "match_pct" || col === "fast_match" || col === "key_match") {
           va = va || 0; vb = vb || 0;
           return asc ? va - vb : vb - va;
         }
@@ -2856,17 +2858,28 @@
       } catch(e) { return {}; }
     })();
     function getVisibleCols() {
-      return batchCols.filter(function(c) { return batchColVisible[c.key] !== false; });
+      return batchCols.filter(function(c) {
+        if (c.key in batchColVisible) return batchColVisible[c.key] !== false;
+        return !c.hiddenByDefault;
+      });
     }
 
     renderBatchHead();
 
+    function _pctSpan(pct, bold) {
+      var color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#d97706" : "#dc2626";
+      var fw = bold ? "font-weight:700" : "font-weight:400";
+      return '<span style="color:' + color + ';' + fw + '">' + pct + '%</span>';
+    }
+
     function cellValue(m, key) {
+      if (key === "fast_match" || key === "key_match") {
+        if (m[key] == null || m[key] === "") return "";
+        return _pctSpan(m[key], false);
+      }
       if (key === "match_pct") {
         if (m.match_pct == null || m.match_pct === "") return "";
-        var pct = m.match_pct;
-        var color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#d97706" : "#dc2626";
-        return '<span style="color:' + color + ';font-weight:700">' + pct + '%</span>';
+        return _pctSpan(m.match_pct, true);
       }
       if (key === "date") return m.date ? m.date.substring(0, 10) : "";
       if (key === "name") {
@@ -3006,7 +3019,7 @@
         var lbl = document.createElement("label");
         var cb = document.createElement("input");
         cb.type = "checkbox";
-        cb.checked = batchColVisible[col.key] !== false;
+        cb.checked = (col.key in batchColVisible) ? batchColVisible[col.key] !== false : !col.hiddenByDefault;
         cb.addEventListener("change", function() {
           batchColVisible[col.key] = cb.checked;
           localStorage.setItem("batchColVisible", JSON.stringify(batchColVisible));

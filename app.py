@@ -40,6 +40,173 @@ _JOB_SEMAPHORE = threading.Semaphore(10)  # max 10 concurrent LLM jobs
 _STORE_LOCK = threading.RLock()  # serialize store file writes (reentrant for nested calls)
 _batch_cancel_flags: dict[str, bool] = {}  # batch_id -> cancelled flag
 
+# ── Embedding cache for fast match ──
+import numpy as np
+EMBED_CACHE_PATH = DATA_DIR / "_cache" / "embeddings.npz"
+(DATA_DIR / "_cache").mkdir(parents=True, exist_ok=True)
+_embed_ids: list[str] = []      # store_ids in order
+_embed_matrix: np.ndarray | None = None  # (N, dim) float32
+_EMBED_LOCK = threading.Lock()
+
+def _load_embed_cache():
+    global _embed_ids, _embed_matrix
+    if EMBED_CACHE_PATH.exists():
+        data = np.load(EMBED_CACHE_PATH, allow_pickle=True)
+        _embed_ids = data["ids"].tolist()
+        _embed_matrix = data["vecs"].astype(np.float32)
+
+def _save_embed_cache():
+    if _embed_matrix is not None and _embed_ids:
+        np.savez_compressed(EMBED_CACHE_PATH,
+                            ids=np.array(_embed_ids, dtype=object),
+                            vecs=_embed_matrix)
+
+def _add_embedding(store_id: str, vec: list[float]):
+    global _embed_ids, _embed_matrix
+    with _EMBED_LOCK:
+        arr = np.array(vec, dtype=np.float32).reshape(1, -1)
+        if store_id in _embed_ids:
+            idx = _embed_ids.index(store_id)
+            _embed_matrix[idx] = arr[0]
+        else:
+            _embed_ids.append(store_id)
+            if _embed_matrix is None:
+                _embed_matrix = arr
+            else:
+                _embed_matrix = np.vstack([_embed_matrix, arr])
+        _save_embed_cache()
+
+def _cv_text_for_embedding(cv_json: dict) -> str:
+    """Build compact text representation of CV for embedding."""
+    basics = cv_json.get("basics", {})
+    parts = [basics.get("current_title", "")]
+    # Skills
+    skills = cv_json.get("skills", {})
+    for cat, items in skills.items():
+        if isinstance(items, list):
+            parts.append(", ".join(items))
+        elif isinstance(items, str):
+            parts.append(items)
+    # Summary
+    parts.append(cv_json.get("summary", ""))
+    # Experience highlights + environment (top 3 roles)
+    for exp in cv_json.get("experience", [])[:3]:
+        parts.append(exp.get("role", ""))
+        hl = exp.get("highlights", [])
+        if isinstance(hl, list):
+            for h in hl[:3]:
+                if isinstance(h, str):
+                    parts.append(h)
+        env = exp.get("environment", "")
+        if isinstance(env, str):
+            parts.append(env)
+    return " ".join(str(p) for p in parts if p)[:2000]  # cap at 2000 chars
+
+def _compute_embedding(text: str) -> list[float] | None:
+    """Call Gemini embedding API."""
+    try:
+        from google import genai
+        config = _core.load_config()
+        api_key = resolve_api_key(APP_DIR, config)
+        client = genai.Client(api_key=api_key)
+        result = client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=text,
+        )
+        return result.embeddings[0].values
+    except Exception as e:
+        print(f"⚠️ Embedding failed: {e}")
+        return None
+
+def _cosine_similarity_batch(jd_vec: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    """Compute cosine similarity between JD vector and all CV vectors."""
+    jd_norm = jd_vec / (np.linalg.norm(jd_vec) + 1e-10)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-10
+    normed = matrix / norms
+    return (normed @ jd_norm.T).flatten()
+
+_load_embed_cache()
+
+# ── Keyword matching for fast scoring ──
+_KW_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "for", "with", "on", "at", "by",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "will", "would", "could", "should", "may", "might", "shall", "can", "must",
+    "not", "no", "but", "if", "then", "than", "that", "this", "these", "those",
+    "it", "its", "we", "our", "you", "your", "they", "their", "he", "she",
+    "as", "from", "about", "into", "through", "during", "before", "after",
+    "above", "below", "between", "under", "over", "such", "each", "all", "any",
+    "both", "more", "most", "other", "some", "only", "very", "also", "just",
+    "experience", "required", "requirements", "responsibilities", "ability",
+    "work", "working", "team", "role", "position", "candidate", "including",
+    "strong", "knowledge", "skills", "years", "etc", "using", "used",
+    "provide", "ensure", "manage", "develop", "support", "include",
+    "based", "related", "well", "new", "within", "across",
+}
+
+def _extract_keywords(text: str) -> set[str]:
+    """Extract meaningful keywords from text (lowercase, no stop words, min 2 chars)."""
+    tokens = re.findall(r'[a-zA-Z0-9#+./-]+', text.lower())
+    # Keep multi-word tech terms by also extracting bigrams
+    keywords = set()
+    for t in tokens:
+        if len(t) >= 2 and t not in _KW_STOP_WORDS:
+            keywords.add(t)
+    return keywords
+
+def _cv_keywords(cv_json: dict) -> set[str]:
+    """Extract keywords from structured CV JSON."""
+    parts = []
+    basics = cv_json.get("basics", {})
+    parts.append(basics.get("current_title", ""))
+    # Skills — most important
+    skills = cv_json.get("skills", {})
+    for cat, items in skills.items():
+        if isinstance(items, list):
+            parts.extend(str(i) for i in items)
+        elif isinstance(items, str):
+            parts.append(items)
+    # Summary
+    parts.append(str(cv_json.get("summary", "")))
+    # Experience environment (tech stacks)
+    for exp in cv_json.get("experience", [])[:5]:
+        env = exp.get("environment", "")
+        if isinstance(env, str):
+            parts.append(env)
+        parts.append(str(exp.get("role", "")))
+    return _extract_keywords(" ".join(parts))
+
+# Pre-compute CV keywords cache
+_cv_keywords_cache: dict[str, set[str]] = {}
+_CV_KW_LOCK = threading.Lock()
+
+def _get_cv_keywords(store_id: str) -> set[str]:
+    """Get cached keywords for a CV, computing if needed."""
+    with _CV_KW_LOCK:
+        if store_id in _cv_keywords_cache:
+            return _cv_keywords_cache[store_id]
+    # Compute outside lock
+    p = STORE_DIR / f"{store_id}.json"
+    if not p.exists():
+        return set()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        cv = {k: v for k, v in data.items() if not k.startswith("_")}
+        kw = _cv_keywords(cv)
+        with _CV_KW_LOCK:
+            _cv_keywords_cache[store_id] = kw
+        return kw
+    except Exception:
+        return set()
+
+def _keyword_match_score(jd_keywords: set[str], cv_keywords: set[str]) -> int:
+    """Compute keyword overlap percentage: matched JD keywords / total JD keywords."""
+    if not jd_keywords:
+        return 0
+    matched = jd_keywords & cv_keywords
+    return int(len(matched) / len(jd_keywords) * 100)
+
+
 import re
 _STORE_ID_RE = re.compile(r'^[a-fA-F0-9]+$')
 
@@ -299,38 +466,136 @@ def reset_prompt(key: str):
 @app.get("/store")
 def list_store(jd_id: str = ""):
     items = _list_store()
+    # Compute fast_match via embeddings if JD selected and embeddings available
+    fast_scores: dict[str, int] = {}
+    if jd_id and _embed_matrix is not None and len(_embed_ids) > 0:
+        jd_path = JD_STORE_DIR / f"{jd_id}.json"
+        if jd_path.exists():
+            try:
+                jd_data = json.loads(jd_path.read_text(encoding="utf-8"))
+                jd_text = jd_data.get("text", "")
+                if jd_text.strip():
+                    # Cache JD embeddings in memory
+                    if not hasattr(list_store, "_jd_embed_cache"):
+                        list_store._jd_embed_cache = {}
+                    if jd_id not in list_store._jd_embed_cache:
+                        jd_vec = _compute_embedding(jd_text[:2000])
+                        if jd_vec:
+                            list_store._jd_embed_cache[jd_id] = np.array(jd_vec, dtype=np.float32)
+                    if jd_id in list_store._jd_embed_cache:
+                        with _EMBED_LOCK:
+                            scores = _cosine_similarity_batch(list_store._jd_embed_cache[jd_id], _embed_matrix)
+                            # Min-max normalize to 0-100 for visual clarity
+                            smin, smax = float(scores.min()), float(scores.max())
+                            spread = smax - smin if smax > smin else 1.0
+                            for i, sid in enumerate(_embed_ids):
+                                fast_scores[sid] = max(0, min(100, int((scores[i] - smin) / spread * 100)))
+            except Exception as e:
+                print(f"⚠️ Fast match error: {e}")
+
+    # Compute keyword match scores
+    key_scores: dict[str, int] = {}
+    if jd_id:
+        jd_path = JD_STORE_DIR / f"{jd_id}.json"
+        if jd_path.exists():
+            try:
+                jd_data = json.loads(jd_path.read_text(encoding="utf-8"))
+                jd_text = jd_data.get("text", "")
+                if jd_text.strip():
+                    jd_kw = _extract_keywords(jd_text)
+                    raw_scores = {}
+                    for m in items:
+                        sid = m.get("id", "")
+                        cv_kw = _get_cv_keywords(sid)
+                        raw_scores[sid] = _keyword_match_score(jd_kw, cv_kw)
+                    # Min-max normalize to 0-100
+                    if raw_scores:
+                        vals = raw_scores.values()
+                        smin, smax = min(vals), max(vals)
+                        spread = smax - smin if smax > smin else 1
+                        for sid, v in raw_scores.items():
+                            key_scores[sid] = int((v - smin) / spread * 100)
+            except Exception as e:
+                print(f"⚠️ Keyword match error: {e}")
+
     if not jd_id:
-        # No JD selected — clear all match_pct
         for m in items:
             m["match_pct"] = None
+            m["fast_match"] = None
+            m["key_match"] = None
         return {"items": items}
-    if jd_id:
-        # Override match_pct with score for specific JD
-        for m in items:
-            sid = m.get("id", "")
-            p = STORE_DIR / f"{sid}.json"
-            if p.exists():
-                try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                    gap_sessions = data.get("_gap_sessions", {})
-                    if jd_id in gap_sessions:
-                        m["match_pct"] = int(gap_sessions[jd_id].get("gap_analysis", {}).get("match_percentage", 0))
-                    else:
-                        # Check old format — maybe this JD matches
-                        old = data.get("_gap_session")
-                        if old and old.get("jd_text"):
-                            old_jd_id = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
-                            if old_jd_id == jd_id:
-                                m["match_pct"] = int(old.get("gap_analysis", {}).get("match_percentage", 0))
-                            else:
-                                m["match_pct"] = None
+
+    # Override match_pct with LLM score for specific JD + add fast_match + key_match
+    for m in items:
+        sid = m.get("id", "")
+        m["fast_match"] = fast_scores.get(sid)
+        m["key_match"] = key_scores.get(sid)
+        p = STORE_DIR / f"{sid}.json"
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                gap_sessions = data.get("_gap_sessions", {})
+                if jd_id in gap_sessions:
+                    m["match_pct"] = int(gap_sessions[jd_id].get("gap_analysis", {}).get("match_percentage", 0))
+                else:
+                    old = data.get("_gap_session")
+                    if old and old.get("jd_text"):
+                        old_jd_id = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
+                        if old_jd_id == jd_id:
+                            m["match_pct"] = int(old.get("gap_analysis", {}).get("match_percentage", 0))
                         else:
                             m["match_pct"] = None
-                except Exception:
-                    m["match_pct"] = None
-            else:
+                    else:
+                        m["match_pct"] = None
+            except Exception:
                 m["match_pct"] = None
+        else:
+            m["match_pct"] = None
     return {"items": items}
+
+
+@app.post("/store/reindex_embeddings")
+async def reindex_embeddings():
+    """Recompute embeddings for all CVs missing from cache. Returns progress."""
+    missing = []
+    for p in STORE_DIR.glob("*.json"):
+        sid = p.stem
+        if sid not in _embed_ids:
+            missing.append(sid)
+    if not missing:
+        return {"ok": True, "total": len(_embed_ids), "computed": 0, "message": "All embeddings up to date"}
+
+    computed = 0
+    errors = 0
+    for sid in missing:
+        try:
+            data = json.loads((STORE_DIR / f"{sid}.json").read_text(encoding="utf-8"))
+            cv = {k: v for k, v in data.items() if not k.startswith("_")}
+            text = _cv_text_for_embedding(cv)
+            if not text.strip():
+                continue
+            vec = _compute_embedding(text)
+            if vec:
+                _add_embedding(sid, vec)
+                computed += 1
+            else:
+                errors += 1
+        except Exception as e:
+            print(f"⚠️ Embed error for {sid[:8]}: {e}")
+            errors += 1
+    return {"ok": True, "total": len(_embed_ids), "computed": computed, "errors": errors}
+
+
+@app.get("/store/embedding_stats")
+def embedding_stats():
+    """Return embedding cache stats."""
+    store_count = len(list(STORE_DIR.glob("*.json")))
+    return {
+        "store_count": store_count,
+        "embedded_count": len(_embed_ids),
+        "missing": store_count - len(_embed_ids),
+        "dimensions": _embed_matrix.shape[1] if _embed_matrix is not None else 0,
+    }
 
 
 @app.get("/store/{store_id}")
@@ -1006,6 +1271,18 @@ def _save_to_store(store_id: str, cv_json: dict, source_filename: str) -> None:
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         _store_cache_upsert(dict(meta))
+        # Compute embedding in background (non-blocking)
+        if store_id not in _embed_ids:
+            threading.Thread(target=_embed_cv_async, args=(store_id, cv_json), daemon=True).start()
+
+
+def _embed_cv_async(store_id: str, cv_json: dict):
+    """Compute and store embedding for a CV (runs in background thread)."""
+    text = _cv_text_for_embedding(cv_json)
+    if text.strip():
+        vec = _compute_embedding(text)
+        if vec:
+            _add_embedding(store_id, vec)
 
 
 def _jd_id_for_text(jd_text: str) -> str:
