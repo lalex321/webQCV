@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(git push:*)",
+      "Bash(ls -la /Users/lalex/Projects/Q-CV/*.py)"
+    ]
+  }
+}

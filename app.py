@@ -628,6 +628,19 @@ def delete_store_item(store_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
     p.unlink()
     _store_cache_remove(store_id)
+    # Clean up caches: base_json, embeddings, keywords
+    base_cache = DATA_DIR / "_cache" / "base_json" / f"{store_id}.base.json"
+    if base_cache.exists():
+        base_cache.unlink()
+    global _embed_matrix
+    with _EMBED_LOCK:
+        if store_id in _embed_ids:
+            idx = _embed_ids.index(store_id)
+            _embed_ids.pop(idx)
+            if _embed_matrix is not None and idx < len(_embed_matrix):
+                _embed_matrix = np.delete(_embed_matrix, idx, axis=0)
+            _save_embed_cache()
+    _cv_keywords_cache.pop(store_id, None)
     return {"ok": True}
 
 
@@ -1324,16 +1337,20 @@ _store_cache_ready = False
 def _store_cache_init():
     """Load all _meta from store files into cache. Called once at startup."""
     global _store_cache_ready
-    for p in STORE_DIR.glob("*.json"):
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            meta = data.get("_meta", {})
-            meta["id"] = p.stem
-            _store_cache.append(meta)
-        except Exception:
-            continue
-    _store_cache.sort(key=lambda m: m.get("date", ""), reverse=True)
-    _store_cache_ready = True
+    with _STORE_LOCK:
+        existing_ids = {m.get("id") for m in _store_cache}
+        for p in STORE_DIR.glob("*.json"):
+            if p.stem in existing_ids:
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                meta = data.get("_meta", {})
+                meta["id"] = p.stem
+                _store_cache.append(meta)
+            except Exception:
+                continue
+        _store_cache.sort(key=lambda m: m.get("date", ""), reverse=True)
+        _store_cache_ready = True
 
 def _store_cache_refresh():
     """Pick up new/changed store files (e.g. by employee_scanner or gap analysis)."""
