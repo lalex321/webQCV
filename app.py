@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from converter_engine import InMemoryJobStore, LowRelevanceError, QCVWebEngine, make_temp_workspace, resolve_api_key, _build_output_base_name, choose_model_name, configure_gemini, call_llm_json
 import cv_engine as _core
+import auth as _auth
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(APP_DIR)))
@@ -31,6 +32,7 @@ USAGE_LOG = DATA_DIR / "usage_log.jsonl"
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 STORE_DIR.mkdir(parents=True, exist_ok=True)
 JD_STORE_DIR.mkdir(parents=True, exist_ok=True)
+_auth.init(DATA_DIR)
 
 app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
@@ -877,7 +879,16 @@ async def setup_save(
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def index(request: Request):
+    # If not authenticated, show login page
+    user = _auth.get_current_user(request)
+    if not user:
+        login_path = APP_DIR / "templates" / "login.html"
+        return RawResponse(
+            content=login_path.read_bytes(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     index_path = APP_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
@@ -886,6 +897,80 @@ def index():
         media_type="text/html",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
+
+
+# ── Auth endpoints ──
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").strip()
+    password = body.get("password") or ""
+    result = _auth.handle_login(email, password)
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token, info = result
+    response = RawResponse(
+        content=json.dumps({"ok": True, **_auth.user_info_response(info)}),
+        media_type="application/json",
+    )
+    response.set_cookie(
+        _auth.COOKIE_NAME, token,
+        httponly=True, samesite="lax", max_age=_auth.TOKEN_TTL,
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user = _auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return _auth.user_info_response(user)
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = RawResponse(
+        content=json.dumps({"ok": True}),
+        media_type="application/json",
+    )
+    response.delete_cookie(_auth.COOKIE_NAME)
+    return response
+
+
+@app.get("/api/auth/users")
+def auth_list_users(request: Request):
+    user = _auth.require_role(_auth.ADMIN)(request)
+    return {"users": _auth.list_users()}
+
+
+@app.put("/api/auth/users/{email}")
+async def auth_upsert_user(email: str, request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
+    body = await request.json()
+    _auth.upsert_user(
+        email=email,
+        name=body.get("name", ""),
+        role=body.get("role", _auth.USER),
+        password=body.get("password", ""),
+        active=body.get("active", True),
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/auth/users/{email}")
+def auth_delete_user(email: str, request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
+    _auth.delete_user(email)
+    return {"ok": True}
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_page(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
+    p = APP_DIR / "templates" / "admin_users.html"
+    return RawResponse(content=p.read_bytes(), media_type="text/html")
 
 
 # ── JD Store ──────────────────────────────────────────────────────────────────

@@ -540,6 +540,8 @@
         <span id="statActive"><span class="stat-dot green"></span>0 active</span>
         <span id="statToday">Today: 0</span>
         <span id="statUptime"></span>
+        <span id="statUser" style="color:#64748b;font-size:11px;margin-left:8px"></span>
+        <a href="#" id="logoutBtn" style="color:#64748b;font-size:11px;text-decoration:none" title="Sign out">Logout</a>
       </div>
     </div>
 
@@ -838,6 +840,33 @@
   </div>
 
   <script>
+    // ── Auth: check session, filter tabs by role ──
+    var _authUser = null;
+    (async function() {
+      try {
+        var r = await fetch("/api/auth/me");
+        if (!r.ok) { location.href = "/"; return; }
+        _authUser = await r.json();
+        var allowed = new Set(_authUser.allowed_panes || []);
+        document.querySelectorAll(".page-tab-btn").forEach(function(btn) {
+          if (!allowed.has(btn.dataset.pane)) btn.style.display = "none";
+        });
+        var userEl = document.getElementById("statUser");
+        if (userEl && _authUser.name) userEl.textContent = _authUser.name + " |";
+        // Wrap localStorage with user-scoped prefix
+        var _prefix = "qcv_" + (_authUser.email || "anon") + "_";
+        var _realLS = window.localStorage;
+        window.localStorage = {
+          getItem: function(k) { return _realLS.getItem(_prefix + k); },
+          setItem: function(k, v) { _realLS.setItem(_prefix + k, v); },
+          removeItem: function(k) { _realLS.removeItem(_prefix + k); },
+          clear: function() { _realLS.clear(); },
+          get length() { return _realLS.length; },
+          key: function(i) { return _realLS.key(i); },
+        };
+      } catch(e) {}
+    })();
+
     const STORAGE_KEYS = {
       anonymize: "qcv_anonymize",
       template: "qcv_template",
@@ -863,6 +892,12 @@
     }
     refreshStats();
     setInterval(refreshStats, 10000);
+
+    // Logout handler
+    document.getElementById("logoutBtn").addEventListener("click", function(e) {
+      e.preventDefault();
+      fetch("/api/auth/logout", { method: "POST" }).then(function() { location.href = "/"; });
+    });
 
     const form = document.getElementById("uploadForm");
     const fileInput = document.getElementById("file");
@@ -2413,13 +2448,10 @@
     }
 
     function selectJD(jdId) {
-      if (jdDirty && !jdSelectedId) {
-        if (!confirm("Discard unsaved new JD?")) return;
-      }
       jdSelectedId = jdId;
       jdDirty = false;
       document.getElementById("jdSaveBtn").disabled = true;
-      document.getElementById("jdDeleteBtn").disabled = false;
+      document.getElementById("jdDeleteBtn").disabled = !_authUser || _authUser.role !== "admin";
       _setJDFieldsReadonly(true);
       // Highlight row
       document.querySelectorAll("#jdBody tr").forEach(function(tr) { tr.classList.remove("selected"); });
@@ -2506,6 +2538,7 @@
       }).then(r => r.json()).then(function(data) {
         if (data.exists) {
           alert("This JD already exists (#" + data.item.number + ")");
+          jdDirty = false;
           selectJD(data.id);
         } else {
           jdItems.push(data.item);
@@ -2519,12 +2552,17 @@
     // Delete — with warning about losing analysis data
     document.getElementById("jdDeleteBtn").addEventListener("click", function() {
       if (!jdSelectedId) return;
+      // Only admin can delete JDs
+      if (!_authUser || _authUser.role !== "admin") {
+        alert("Only administrators can delete JDs.");
+        return;
+      }
       var jd = jdItems.find(function(j) { return j.id === jdSelectedId; });
       var title = jd ? (jd.title || "Untitled") : "this JD";
       var candidates = jd ? (jd.candidates || 0) : 0;
       var msg = 'Delete "' + title + '"?';
       if (candidates > 0) {
-        msg += "\n\nThis will also remove gap analysis results for " + candidates + " candidate(s). This analysis data cannot be recovered.";
+        msg += "\n\nWARNING: " + candidates + " candidate(s) have been analyzed against this JD. All gap analysis results will be permanently lost.";
       }
       if (!confirm(msg)) return;
       fetch("/jd_store/" + jdSelectedId, {method: "DELETE"}).then(r => r.json()).then(function() {
