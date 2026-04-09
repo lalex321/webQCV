@@ -528,6 +528,70 @@ def _build_content_details(data: dict, *, template_name: str, anonymize: bool, s
         result["jd_keyword_report"] = _compute_jd_keyword_report(data, jd_text)
     return result
 
+def _enforce_source_skills(data: dict, source_text: str) -> None:
+    """Replace LLM-enriched skills with skills parsed directly from source text.
+
+    LLM models (especially Gemini Flash) persistently ignore instructions to keep
+    skills verbatim and instead "enrich" them with items from experience sections.
+    This function parses the original Skills section from source text and overwrites
+    the LLM output.
+    """
+    if not source_text or not isinstance(data.get("skills"), dict):
+        return
+
+    # Find the Skills section in source text
+    lines = source_text.split("\n")
+    skills_start = -1
+    skills_end = len(lines)
+
+    # Common headers for skills section
+    _SKILLS_HEADERS = {
+        "technical skills", "skills", "core competencies", "technologies",
+        "tech stack", "technical expertise", "key skills", "professional skills",
+    }
+    # Headers that end the skills section
+    _END_HEADERS = {
+        "experience", "professional experience", "work experience", "employment",
+        "work history", "career history", "projects", "certifications",
+        "education", "languages", "publications", "references", "interests",
+        "achievements", "awards", "summary", "profile", "objective",
+    }
+
+    for i, line in enumerate(lines):
+        # Strip markers like === ... ===, --- ... ---, and trailing colons
+        stripped = re.sub(r'^[=\-#*\s]+|[=\-#*\s:]+$', '', line).strip().lower()
+        if stripped in _SKILLS_HEADERS:
+            skills_start = i + 1
+        elif skills_start >= 0 and stripped in _END_HEADERS:
+            skills_end = i
+            break
+
+    if skills_start < 0:
+        return  # No skills section found in source — keep LLM output
+
+    # Parse "Category: item1, item2, item3" pattern
+    parsed_skills = {}
+    for line in lines[skills_start:skills_end]:
+        line = line.strip()
+        if not line:
+            continue
+        # Match "Category Name: item1, item2, ..."
+        m = re.match(r'^([^:]+):\s*(.+)$', line)
+        if m:
+            category = m.group(1).strip()
+            items_str = m.group(2).strip()
+            # Split by comma, semicolon, or pipe
+            items = [item.strip() for item in re.split(r'[,;|]', items_str) if item.strip()]
+            if category and items:
+                parsed_skills[category] = items
+
+    if not parsed_skills:
+        return  # Could not parse skills — keep LLM output
+
+    # Replace LLM skills with parsed source skills
+    data["skills"] = parsed_skills
+
+
 def _translate_non_english(data: dict, model_name: str = "") -> None:
     """Translate non-English content via LLM (no-op if all English)."""
     if not _gemini_api_key or not isinstance(data, dict):
@@ -648,6 +712,8 @@ class QCVWebEngine:
         if hasattr(core, "sanitize_json"):
             data = core.sanitize_json(data)
         _translate_non_english(data, self.model_name)
+        # Post-process: enforce skills from source text (LLM tends to "enrich" skills)
+        _enforce_source_skills(data, source_text)
         return data
 
     def _parse_cv_file_to_json(self, source_path: Path | str) -> dict:
