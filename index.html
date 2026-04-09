@@ -540,6 +540,7 @@
         <span id="statActive"><span class="stat-dot green"></span>0 active</span>
         <span id="statToday">Today: 0</span>
         <span id="statUptime"></span>
+        <span id="statOnline" style="color:#16a34a;font-size:11px;margin-left:8px"></span>
         <span id="statUser" style="color:#64748b;font-size:11px;margin-left:8px"></span>
         <a href="#" id="logoutBtn" style="color:#64748b;font-size:11px;text-decoration:none" title="Sign out">Logout</a>
       </div>
@@ -888,6 +889,15 @@
         activeEl.innerHTML = `<span class="stat-dot ${dot}"></span>${s.active_jobs} active`;
         todayEl.textContent = `Today: ${s.today_processed}` + (s.today_failed ? ` (${s.today_failed} failed)` : "");
         uptimeEl.textContent = `Up: ${s.uptime}`;
+        // Show online users for admins
+        var onlineEl = document.getElementById("statOnline");
+        if (onlineEl && s.online_users) {
+          var names = s.online_users.map(function(e) { return e.split("@")[0]; });
+          onlineEl.textContent = names.length + " online: " + names.join(", ");
+          onlineEl.title = s.online_users.join(", ");
+        } else if (onlineEl) {
+          onlineEl.textContent = "";
+        }
       } catch {}
     }
     refreshStats();

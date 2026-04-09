@@ -1226,9 +1226,15 @@ def delete_jd(jd_id: str, request: Request):
     return {"ok": True}
 
 
+_online_users: dict[str, float] = {}  # email -> last_seen timestamp
+_ONLINE_TIMEOUT = 30  # seconds — user is "online" if seen within this window
+
 @app.get("/stats")
 def server_stats(request: Request):
-    _auth.require_auth(request)
+    user = _auth.require_auth(request)
+    # Track online status
+    _online_users[user["email"]] = time.time()
+
     today = time.strftime("%Y-%m-%d")
     events = _read_usage_events()
     today_done = sum(1 for e in events if e.get("event") == "done" and e.get("ts", "").startswith(today))
@@ -1238,13 +1244,21 @@ def server_stats(request: Request):
     h, rem = divmod(uptime_sec, 3600)
     m, s = divmod(rem, 60)
     uptime_str = f"{h}h {m}m" if h else f"{m}m {s}s"
-    return {
+    result = {
         "active_jobs": jobs.active_count(),
         "today_processed": today_done,
         "today_failed": today_failed,
         "total_processed": total_done,
         "uptime": uptime_str,
     }
+    # For admins — show who's online
+    if user["role"] == _auth.ADMIN:
+        now = time.time()
+        result["online_users"] = [
+            email for email, ts in _online_users.items()
+            if now - ts < _ONLINE_TIMEOUT
+        ]
+    return result
 
 
 @app.get("/templates")
