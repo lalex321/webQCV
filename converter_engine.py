@@ -928,11 +928,36 @@ class QCVWebEngine:
         except Exception as e:
             raise RuntimeError(f"DOCX generation failed: {e}") from e
 
+        final_path = None
         if isinstance(maybe, (str, Path)) and Path(maybe).exists():
-            return Path(maybe)
-        if result_path.exists():
-            return result_path
-        raise RuntimeError("DOCX generation did not produce an output file")
+            final_path = Path(maybe)
+        elif result_path.exists():
+            final_path = result_path
+        else:
+            raise RuntimeError("DOCX generation did not produce an output file")
+
+        # Post-process: color "Projects (Quantori Staffing)" section in blue
+        try:
+            self._color_projects_section(final_path)
+        except Exception:
+            pass
+        return final_path
+
+    @staticmethod
+    def _color_projects_section(docx_path: Path):
+        """Post-process DOCX: color Projects (Quantori Staffing) section blue."""
+        from docx import Document
+        from docx.shared import RGBColor
+        doc = Document(str(docx_path))
+        in_projects = False
+        blue = RGBColor(0x25, 0x63, 0xEB)  # #2563eb
+        for para in doc.paragraphs:
+            if "Projects (Quantori Staffing)" in para.text:
+                in_projects = True
+            if in_projects:
+                for run in para.runs:
+                    run.font.color.rgb = blue
+        doc.save(str(docx_path))
 
     def _base_json_artifacts_dir(self) -> Path:
         return self.cache_dir / "base_json"
@@ -984,6 +1009,7 @@ class QCVWebEngine:
         gap_ready_cb: Optional[Callable[[dict], None]] = None,
         focus_skills_cb: Optional[Callable[[], list]] = None,
         preloaded_data: dict | None = None,
+        extra_sections_cb: Optional[Callable[[dict], list | None]] = None,
     ) -> Path:
         source_path = Path(source_path)
         self.last_content_details = None
@@ -1072,8 +1098,18 @@ class QCVWebEngine:
             jd_text=jd_text if tailor else "",
         )
 
+        render_data = data
+        if extra_sections_cb:
+            try:
+                extra = extra_sections_cb(data)
+                if extra:
+                    render_data = copy.deepcopy(data)
+                    render_data.setdefault("other_sections", []).extend(extra)
+            except Exception:
+                pass
+
         self._status(status_cb, "Generating DOCX", 90)
-        result_path = self._generate_docx(data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
+        result_path = self._generate_docx(render_data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
 
         self._status(status_cb, "Done", 100)
         return result_path

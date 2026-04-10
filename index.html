@@ -597,6 +597,12 @@
 
           <div class="field">
             <div class="check-card">
+              <label style="color:#2563eb"><input id="addProjects" type="checkbox" /> Add Projects</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="check-card">
               <label><input id="tailor" type="checkbox" /> Tailor to JD</label>
             </div>
           </div>
@@ -913,6 +919,7 @@
     const fileInput = document.getElementById("file");
     const templateSelect = document.getElementById("template");
     const anonymizeInput = document.getElementById("anonymize");
+    const addProjectsInput = document.getElementById("addProjects");
     const tailorInput = document.getElementById("tailor");
     const warnJsonInput = document.getElementById("warnJson");
     const jdField = document.getElementById("jdField");
@@ -2141,6 +2148,7 @@
             formData.append("template_name", templateSelect.value);
             formData.append("anonymize", anonymizeInput.checked ? "true" : "false");
             formData.append("autofix", "false");
+            formData.append("add_projects", addProjectsInput.checked ? "true" : "false");
             formData.append("tailor", "true");
             formData.append("jd_text", jdText.value.trim());
             formData.append("force_tailor", "true");
@@ -2214,6 +2222,17 @@
       optionsChangedSinceJob = true;
       if (tailorInput.checked && hasGapData) {
         /* Gap data still valid — let user re-generate with new options */
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate Tailored CV";
+        generateBtn.classList.remove("hidden");
+        topDownloadLink.classList.add("hidden");
+      } else {
+        setPrimaryAction("idle");
+      }
+    });
+    addProjectsInput.addEventListener("change", () => {
+      optionsChangedSinceJob = true;
+      if (tailorInput.checked && hasGapData) {
         generateBtn.disabled = false;
         generateBtn.textContent = "Generate Tailored CV";
         generateBtn.classList.remove("hidden");
@@ -2365,6 +2384,7 @@
       formData.append("file", file);
       formData.append("anonymize", anonymizeInput.checked ? "true" : "false");
       formData.append("autofix", "false");
+      formData.append("add_projects", addProjectsInput.checked ? "true" : "false");
       formData.append("tailor", tailorInput.checked ? "true" : "false");
       formData.append("jd_text", tailorInput.checked ? jdText.value : "");
       formData.append("template_name", templateSelect.value);
@@ -3520,10 +3540,10 @@
         statusBarFile.textContent = data._meta && data._meta.name || "";
         setPrimaryAction("idle");
 
-        // Enable tailor mode and fill JD from Database dropdown (or session fallback)
-        tailorInput.checked = true;
-        jdField.classList.remove("hidden");
-        document.getElementById("pageRoot").classList.add("tailor-mode");
+        // Restore tailor checkbox from user's last preference
+        tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
+        jdField.classList.toggle("hidden", !tailorInput.checked);
+        document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
         if (selJdId) {
           try {
             var jr = await fetch("/jd_store/" + selJdId);

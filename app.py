@@ -1034,7 +1034,7 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     extracted = 0
     for name in zf.namelist():
         # Only allow known directories
-        if not any(name.startswith(p) for p in ("_store/", "_jd_store/", "_cache/", "_users.json", "_employees.json")):
+        if not any(name.startswith(p) for p in ("_store/", "_jd_store/", "_cache/", "_users.json", "_employees.json", "_positions.json")):
             continue
         target = DATA_DIR / name
         if name.endswith("/"):
@@ -1050,6 +1050,7 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     global _embed_ids, _embed_matrix, _store_cache
     _load_embed_cache()
     _load_employees()
+    _load_positions()
     # Force full cache rebuild
     global _store_cache_ready
     _store_cache = []
@@ -1146,6 +1147,68 @@ def list_employees(request: Request, q: str = ""):
         q_lower = q.lower()
         data = [e for e in data if q_lower in json.dumps(e, ensure_ascii=False, default=str).lower()]
     return {"employees": data, "total": len(_employees_cache)}
+
+
+# ── Positions / Projects Directory ───────────────────────────────────────────
+
+POSITIONS_PATH = DATA_DIR / "_positions.json"
+_positions_cache: list[dict] = []
+
+def _load_positions():
+    global _positions_cache
+    if POSITIONS_PATH.exists():
+        _positions_cache = json.loads(POSITIONS_PATH.read_text(encoding="utf-8"))
+    return _positions_cache
+
+def _save_positions(data: list[dict]):
+    global _positions_cache
+    _positions_cache = data
+    POSITIONS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+_load_positions()
+
+
+@app.post("/admin/upload_positions")
+async def admin_upload_positions(request: Request, file: UploadFile = File(...)):
+    """Upload Position_Projects.xlsx, parse and save as _positions.json."""
+    _auth.require_role(_auth.ADMIN)(request)
+    import openpyxl, io
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+    except Exception:
+        raise HTTPException(400, "Invalid xlsx file")
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    if len(rows) < 2:
+        raise HTTPException(400, "Empty spreadsheet")
+    headers = [str(h or "").strip().lower() for h in rows[0]]
+    positions = []
+    for row in rows[1:]:
+        rec = {}
+        for i, val in enumerate(row):
+            if i < len(headers) and headers[i]:
+                if hasattr(val, "isoformat"):
+                    val = val.isoformat()[:10]
+                rec[headers[i]] = val
+        if rec.get("employee_name") or rec.get("position_code"):
+            positions.append(rec)
+    _save_positions(positions)
+    return {"ok": True, "count": len(positions)}
+
+
+@app.get("/admin/positions")
+def list_positions(request: Request, q: str = "", employee: str = ""):
+    """Return positions, optionally filtered by search or employee name."""
+    _auth.require_auth(request)
+    data = _positions_cache or _load_positions()
+    if employee:
+        emp_lower = employee.lower()
+        data = [p for p in data if (p.get("employee_name") or "").lower() == emp_lower]
+    if q:
+        q_lower = q.lower()
+        data = [p for p in data if q_lower in json.dumps(p, ensure_ascii=False, default=str).lower()]
+    return {"positions": data, "total": len(_positions_cache)}
 
 
 # ── JD Store ──────────────────────────────────────────────────────────────────
@@ -1730,7 +1793,38 @@ def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str, 
         _JOB_SEMAPHORE.release()
 
 
-def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None, user_email: str = "anonymous") -> None:
+def _build_projects_section(cv_data: dict) -> list[dict] | None:
+    """Build 'Projects (Quantori Staffing)' section from positions data."""
+    if not _positions_cache:
+        return None
+    name = (cv_data.get("basics") or {}).get("name", "")
+    if not name:
+        return None
+    name_lower = name.lower()
+    positions = [p for p in _positions_cache if (p.get("employee_name") or "").lower() == name_lower]
+    if not positions:
+        return None
+    # Sort: active first (Assigned/Booked), then by date desc
+    status_order = {"Assigned": 0, "Booked": 1, "Proposed": 2, "Requested": 3, "Ended": 4}
+    positions.sort(key=lambda p: (status_order.get(p.get("workload_status", ""), 9), -(p.get("wd_close_date") or "").__hash__()))
+    items = []
+    for p in positions:
+        account = p.get("account", "")
+        role = p.get("position_code", "")
+        status = p.get("workload_status", "")
+        start = (p.get("wd_open_date") or "")[:7]  # YYYY-MM
+        end = (p.get("wd_close_date") or "")[:7]
+        fte = p.get("fte", "")
+        period = f"{start}" + (f" - {end}" if end and end != start else "")
+        line = f"{account} — {role}"
+        if fte and fte != 1:
+            line += f" ({fte} FTE)"
+        line += f", {status}, {period}"
+        items.append(line)
+    return [{"title": "Projects (Quantori Staffing)", "items": items}]
+
+
+def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None, user_email: str = "anonymous", add_projects: bool = False) -> None:
     jobs.update(job_id, status="Queued", progress=0)
     _JOB_SEMAPHORE.acquire()
     try:
@@ -1823,6 +1917,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             gap_ready_cb=gap_ready_cb,
             focus_skills_cb=focus_skills_cb,
             preloaded_data=preloaded_data,
+            extra_sections_cb=_build_projects_section if add_projects else None,
         )
 
         # Store base CV JSON on job for download
@@ -1937,6 +2032,7 @@ async def create_job(
     focus_skills_json: str = Form(""),
     import_only: bool = Form(False),
     store_id: str = Form(""),
+    add_projects: bool = Form(False),
 ):
     _auth.require_auth(request)
     suffix = Path(file.filename or "upload.docx").suffix.lower()
@@ -2041,6 +2137,7 @@ async def create_job(
             "preloaded_data": preloaded_data,
             "preloaded_gap": fit_session.get("gap_analysis") if fit_session else None,
             "user_email": user_email,
+            "add_projects": add_projects,
         },
         daemon=True,
     )
