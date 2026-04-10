@@ -1105,8 +1105,8 @@ class QCVWebEngine:
                 if extra:
                     render_data = copy.deepcopy(data)
                     render_data.setdefault("other_sections", []).extend(extra)
-            except Exception:
-                pass
+            except Exception as e:
+                self._debug(debug_cb, f"extra_sections_cb error: {e}")
 
         self._status(status_cb, "Generating DOCX", 90)
         result_path = self._generate_docx(render_data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
