@@ -936,27 +936,84 @@ class QCVWebEngine:
         else:
             raise RuntimeError("DOCX generation did not produce an output file")
 
-        # Post-process: color "Projects (Quantori Staffing)" section in blue
-        try:
-            self._color_projects_section(final_path)
-        except Exception:
-            pass
         return final_path
 
     @staticmethod
-    def _color_projects_section(docx_path: Path):
-        """Post-process DOCX: color Projects (Quantori Staffing) section blue."""
+    def _inject_projects_table(docx_path: Path, rows: list[dict]):
+        """Post-process DOCX: find Projects heading, insert borderless table after it."""
         from docx import Document
-        from docx.shared import RGBColor
+        from docx.shared import RGBColor, Pt
+        from docx.oxml.ns import qn, nsdecls
+        from docx.oxml import parse_xml
+
         doc = Document(str(docx_path))
-        in_projects = False
-        blue = RGBColor(0x25, 0x63, 0xEB)  # #2563eb
+        blue = RGBColor(0x25, 0x63, 0xEB)
+
+        # Find the Projects heading paragraph
+        target_para = None
         for para in doc.paragraphs:
             if "Projects (Quantori Staffing)" in para.text:
-                in_projects = True
-            if in_projects:
+                target_para = para
+                # Color heading blue
                 for run in para.runs:
                     run.font.color.rgb = blue
+                break
+
+        if not target_para or not rows:
+            doc.save(str(docx_path))
+            return
+
+        # Create borderless table after the heading
+        from docx.shared import Inches
+        table = doc.add_table(rows=len(rows), cols=2)
+        # Remove all borders
+        tbl = table._tbl
+        tbl_pr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+        borders = parse_xml(
+            f'<w:tblBorders {nsdecls("w")}>'
+            '<w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '<w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '<w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '<w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '<w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            '</w:tblBorders>'
+        )
+        tbl_pr.append(borders)
+        if tbl.tblPr is None:
+            tbl.insert(0, tbl_pr)
+
+        # Enable autofit for the table
+        tbl_pr.append(parse_xml(f'<w:tblLayout {nsdecls("w")} w:type="autofit"/>'))
+
+        for i, row_data in enumerate(rows):
+            row = table.rows[i]
+            # Date cell (bold, blue)
+            cell_date = row.cells[0]
+            cell_date.text = ""
+            # Remove preferred width so Word autofits
+            tc_pr = cell_date._element.tcPr
+            if tc_pr is not None:
+                for w_el in tc_pr.findall(qn('w:tcW')):
+                    tc_pr.remove(w_el)
+            run_date = cell_date.paragraphs[0].add_run(row_data["period"])
+            run_date.bold = True
+            run_date.font.color.rgb = blue
+            run_date.font.size = Pt(11)
+            # Detail cell (blue)
+            cell_detail = row.cells[1]
+            cell_detail.text = ""
+            tc_pr2 = cell_detail._element.tcPr
+            if tc_pr2 is not None:
+                for w_el in tc_pr2.findall(qn('w:tcW')):
+                    tc_pr2.remove(w_el)
+            run_detail = cell_detail.paragraphs[0].add_run(row_data["detail"])
+            run_detail.font.color.rgb = blue
+            run_detail.font.size = Pt(11)
+
+        # Move table to right after the heading paragraph
+        target_para._element.addnext(tbl)
+
         doc.save(str(docx_path))
 
     def _base_json_artifacts_dir(self) -> Path:
@@ -1099,17 +1156,30 @@ class QCVWebEngine:
         )
 
         render_data = data
+        _project_rows = None
         if extra_sections_cb:
             try:
                 extra = extra_sections_cb(data)
                 if extra:
                     render_data = copy.deepcopy(data)
-                    render_data.setdefault("other_sections", []).extend(extra)
+                    # Add title-only section (table rows injected in post-processing)
+                    for sec in extra:
+                        _project_rows = sec.get("_table_rows")
+                        render_data.setdefault("other_sections", []).append(
+                            {"title": sec["title"], "items": sec.get("items", [])}
+                        )
             except Exception as e:
                 self._debug(debug_cb, f"extra_sections_cb error: {e}")
 
         self._status(status_cb, "Generating DOCX", 90)
         result_path = self._generate_docx(render_data, output_dir, source_path.stem, template_name, anonymize=anonymize, tailor=tailor, debug_cb=debug_cb)
+
+        # Inject projects table into DOCX (post-processing)
+        if _project_rows and result_path and result_path.exists():
+            try:
+                self._inject_projects_table(result_path, _project_rows)
+            except Exception:
+                pass
 
         self._status(status_cb, "Done", 100)
         return result_path

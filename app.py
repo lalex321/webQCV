@@ -1860,21 +1860,24 @@ def _build_projects_section(cv_data: dict) -> list[dict] | None:
         status_order.get(p.get("workload_status", ""), 9),
         "".join(chr(255 - ord(c)) for c in (p.get("wd_close_date") or "0000-00-00")),
     ))
-    items = []
+    import calendar
+    def _fmt_month(ym: str) -> str:
+        """Convert '2026-01' to 'January 2026'."""
+        try:
+            parts = ym.split("-")
+            return f"{calendar.month_abbr[int(parts[1])]} {parts[0]}"
+        except Exception:
+            return ym
+
+    rows = []
     for p in positions:
         account = p.get("account", "")
         role = p.get("position_code", "")
-        status = p.get("workload_status", "")
-        start = (p.get("wd_open_date") or "")[:7]  # YYYY-MM
+        start = (p.get("wd_open_date") or "")[:7]
         end = (p.get("wd_close_date") or "")[:7]
-        fte = p.get("fte", "")
-        period = f"{start}" + (f" - {end}" if end and end != start else "")
-        line = f"{account} — {role}"
-        if fte and fte != 1:
-            line += f" ({fte} FTE)"
-        line += f", {status}, {period}"
-        items.append(line)
-    return [{"title": "Projects (Quantori Staffing)", "items": items}]
+        period = _fmt_month(start) + (" – " + _fmt_month(end) if end and end != start else "")
+        rows.append({"period": period, "detail": f"{account} — {role}"})
+    return [{"title": "Projects (Quantori Staffing)", "items": [], "_table_rows": rows}]
 
 
 def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, autofix: bool, tailor: bool, jd_text: str, force_tailor: bool, template_name: str, source_key: str | None, client_ip: str, started_at: float, skip_gap: bool = False, preloaded_focus_skills: list | None = None, preloaded_data: dict | None = None, preloaded_gap: dict | None = None, user_email: str = "anonymous", add_projects: bool = False) -> None:
