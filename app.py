@@ -38,6 +38,8 @@ app = FastAPI(title="Q-CV Web Converter")
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
+_stats_cache: dict = {}
+_stats_cache_ts: float = 0.0
 _JOB_SEMAPHORE = threading.Semaphore(10)  # max 10 concurrent LLM jobs
 _STORE_LOCK = threading.RLock()  # serialize store file writes (reentrant for nested calls)
 _batch_cancel_flags: dict[str, bool] = {}  # batch_id -> cancelled flag
@@ -705,12 +707,27 @@ async def batch_store_action(request: Request):
 
     if action == "delete":
         deleted = 0
+        global _embed_matrix
         for sid in ids:
             p = STORE_DIR / f"{sid}.json"
             if p.exists():
                 p.unlink()
                 _store_cache_remove(sid)
+                # Clean up caches (same as single delete)
+                base_cache = DATA_DIR / "_cache" / "base_json" / f"{sid}.base.json"
+                if base_cache.exists():
+                    base_cache.unlink()
+                with _EMBED_LOCK:
+                    if sid in _embed_ids:
+                        idx = _embed_ids.index(sid)
+                        _embed_ids.pop(idx)
+                        if _embed_matrix is not None and idx < len(_embed_matrix):
+                            _embed_matrix = np.delete(_embed_matrix, idx, axis=0)
+                _cv_keywords_cache.pop(sid, None)
                 deleted += 1
+        if deleted:
+            with _EMBED_LOCK:
+                _save_embed_cache()
         return {"ok": True, "deleted": deleted}
 
     if action == "analyze":
@@ -739,8 +756,12 @@ async def batch_store_action(request: Request):
                     pass
             todo_ids.append(sid)
 
-        # Create batch cancel flag
-        batch_id = f"batch_{int(time.time()*1000)}"
+        # Create batch cancel flag (clean up old entries first)
+        now_ms = int(time.time() * 1000)
+        stale = [k for k in _batch_cancel_flags if int(k.split("_")[1]) < now_ms - 3600_000]
+        for k in stale:
+            _batch_cancel_flags.pop(k, None)
+        batch_id = f"batch_{now_ms}"
         _batch_cancel_flags[batch_id] = False
 
         # Create jobs upfront (for frontend polling) but run sequentially
@@ -1098,6 +1119,8 @@ def _load_employees():
     global _employees_cache
     if EMPLOYEES_PATH.exists():
         _employees_cache = json.loads(EMPLOYEES_PATH.read_text(encoding="utf-8"))
+    else:
+        _employees_cache = []
     return _employees_cache
 
 def _save_employees(data: list[dict]):
@@ -1158,6 +1181,8 @@ def _load_positions():
     global _positions_cache
     if POSITIONS_PATH.exists():
         _positions_cache = json.loads(POSITIONS_PATH.read_text(encoding="utf-8"))
+    else:
+        _positions_cache = []
     return _positions_cache
 
 def _save_positions(data: list[dict]):
@@ -1216,17 +1241,41 @@ def list_positions(request: Request, q: str = "", employee: str = ""):
 _JD_LOCK = threading.Lock()
 _jd_cache: list[dict] = []
 _jd_cache_ready = False
+_jd_candidate_counts: dict[str, int] = {}  # jd_id -> candidate count
+_jd_counts_ready = False
 
 def _jd_cache_init():
     global _jd_cache_ready
-    for p in JD_STORE_DIR.glob("*.json"):
+    with _JD_LOCK:
+        if _jd_cache_ready:
+            return
+        for p in JD_STORE_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                _jd_cache.append(data)
+            except Exception:
+                continue
+        _jd_cache.sort(key=lambda j: j.get("number", 0))
+        _jd_cache_ready = True
+
+def _jd_counts_init():
+    """Build JD candidate counts from store files (once at startup)."""
+    global _jd_counts_ready
+    counts: dict[str, int] = {}
+    for p in STORE_DIR.glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            _jd_cache.append(data)
+            for jid in data.get("_gap_sessions", {}):
+                counts[jid] = counts.get(jid, 0) + 1
+            old = data.get("_gap_session")
+            if old and old.get("jd_text") and "_gap_sessions" not in data:
+                old_jid = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
+                counts[old_jid] = counts.get(old_jid, 0) + 1
         except Exception:
             continue
-    _jd_cache.sort(key=lambda j: j.get("number", 0))
-    _jd_cache_ready = True
+    _jd_candidate_counts.update(counts)
+    _jd_counts_ready = True
+
 
 def _jd_next_number() -> int:
     if not _jd_cache:
@@ -1267,21 +1316,8 @@ def list_jd_store(request: Request):
     _auth.require_auth(request)
     if not _jd_cache_ready:
         _jd_cache_init()
-    # Count candidates per JD from store cache
-    jd_counts: dict[str, int] = {}
-    with _STORE_LOCK:
-        for p in STORE_DIR.glob("*.json"):
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                for jid in data.get("_gap_sessions", {}):
-                    jd_counts[jid] = jd_counts.get(jid, 0) + 1
-                # Also count old format
-                old = data.get("_gap_session")
-                if old and old.get("jd_text") and "_gap_sessions" not in data:
-                    old_jid = hashlib.sha256(old["jd_text"].strip().encode()).hexdigest()
-                    jd_counts[old_jid] = jd_counts.get(old_jid, 0) + 1
-            except Exception:
-                continue
+    if not _jd_counts_ready:
+        _jd_counts_init()
     with _JD_LOCK:
         items = []
         for j in sorted(_jd_cache, key=lambda x: x.get("number", 0)):
@@ -1291,7 +1327,7 @@ def list_jd_store(request: Request):
                 "title": j.get("title", ""),
                 "company": j.get("company", ""),
                 "date": j.get("date", ""),
-                "candidates": jd_counts.get(j["id"], 0),
+                "candidates": _jd_candidate_counts.get(j["id"], 0),
             })
         return {"items": items}
 
@@ -1396,10 +1432,21 @@ def server_stats(request: Request):
     _online_users[user["email"]] = time.time()
 
     today = time.strftime("%Y-%m-%d")
-    events = _read_usage_events()
-    today_done = sum(1 for e in events if e.get("event") == "done" and e.get("ts", "").startswith(today))
-    today_failed = sum(1 for e in events if e.get("event") == "failed" and e.get("ts", "").startswith(today))
-    total_done = sum(1 for e in events if e.get("event") == "done")
+    # Use cached stats (refreshed every 30s to avoid parsing full log on every poll)
+    global _stats_cache, _stats_cache_ts
+    now = time.time()
+    if now - _stats_cache_ts > 30 or _stats_cache.get("_date") != today:
+        events = _read_usage_events()
+        _stats_cache = {
+            "_date": today,
+            "today_done": sum(1 for e in events if e.get("event") == "done" and e.get("ts", "").startswith(today)),
+            "today_failed": sum(1 for e in events if e.get("event") == "failed" and e.get("ts", "").startswith(today)),
+            "total_done": sum(1 for e in events if e.get("event") == "done"),
+        }
+        _stats_cache_ts = now
+    today_done = _stats_cache["today_done"]
+    today_failed = _stats_cache["today_failed"]
+    total_done = _stats_cache["total_done"]
     uptime_sec = int(time.time() - _SERVER_START)
     h, rem = divmod(uptime_sec, 3600)
     m, s = divmod(rem, 60)
@@ -1695,6 +1742,8 @@ def _save_store_gap(store_id: str, gap_analysis: dict, jd_text: str, base_json: 
         data["_meta"]["id"] = p.stem
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         _store_cache_upsert(dict(data["_meta"]))
+        # Update JD candidate count
+        _jd_candidate_counts[jd_id] = _jd_candidate_counts.get(jd_id, 0) + 1
 
 
 def _update_store_tailor(store_id: str, tailored_json: dict, jd_text: str,
@@ -1806,7 +1855,11 @@ def _build_projects_section(cv_data: dict) -> list[dict] | None:
         return None
     # Sort: active first (Assigned/Booked), then by date desc
     status_order = {"Assigned": 0, "Booked": 1, "Proposed": 2, "Requested": 3, "Ended": 4}
-    positions.sort(key=lambda p: (status_order.get(p.get("workload_status", ""), 9), -(p.get("wd_close_date") or "").__hash__()))
+    # Sort: active statuses first, then by close date descending (most recent first)
+    positions.sort(key=lambda p: (
+        status_order.get(p.get("workload_status", ""), 9),
+        "".join(chr(255 - ord(c)) for c in (p.get("wd_close_date") or "0000-00-00")),
+    ))
     items = []
     for p in positions:
         account = p.get("account", "")
