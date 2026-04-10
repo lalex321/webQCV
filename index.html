@@ -2967,7 +2967,8 @@
           if (col.editable) {
             cells += '<td class="editable-cell" data-store-id="' + m.id + '" data-field="' + col.key + '">' + esc(m[col.key] || "") + '</td>';
           } else if (col.key === "name") {
-            cells += '<td class="name-cell">' + cellValue(m, col.key) + '</td>';
+            var nameStyle = (m.comments || "").toLowerCase().indexOf("active") >= 0 ? ' style="color:#2563eb"' : '';
+            cells += '<td class="name-cell"' + nameStyle + '>' + cellValue(m, col.key) + '</td>';
           } else {
             cells += '<td>' + cellValue(m, col.key) + '</td>';
           }
