@@ -31,7 +31,7 @@
   <a href="/">← Back to App</a>
 </div>
 <table>
-  <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th><th>Created</th><th>Password</th><th></th></tr></thead>
+  <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th><th>Created</th><th>Password</th><th>New Password</th><th></th></tr></thead>
   <tbody id="tbody"></tbody>
 </table>
 <div class="msg" id="msg"></div>
@@ -61,6 +61,7 @@ function render() {
       '</select></td>' +
       '<td><input type="checkbox" data-field="active"' + (u.active ? " checked" : "") + '></td>' +
       '<td style="font-size:12px;color:#64748b">' + (u.created || "").substring(0,10) + '</td>' +
+      '<td style="font-size:12px;color:#64748b">' + esc(u.password_plain || "") + '</td>' +
       '<td><input type="text" placeholder="new password" data-field="password" style="width:100px"></td>' +
       '<td><button class="primary" data-save="' + esc(u.email) + '">Save</button> ' +
           '<button class="danger" data-del="' + esc(u.email) + '">Del</button></td>';
@@ -97,10 +98,15 @@ async function delUser(email) {
 document.getElementById("addBtn").addEventListener("click", function() {
   var email = prompt("Email:");
   if (!email) return;
+  var pw = prompt("Password:");
+  if (!pw) return;
   fetch("/api/auth/users/" + encodeURIComponent(email), {
     method: "PUT", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ email: email, role: "basic", active: true, password: "changeme" })
-  }).then(function() { msg("Added with password 'changeme'", "ok"); load(); });
+    body: JSON.stringify({ email: email, role: "basic", active: true, password: pw })
+  }).then(function(r) {
+    if (r.ok) { msg("Added", "ok"); load(); }
+    else { r.json().then(function(d) { msg("Error: " + d.detail, "err"); }); }
+  });
 });
 
 function msg(t, cls) { var m = document.getElementById("msg"); m.textContent = t; m.className = "msg " + cls; setTimeout(function(){ m.textContent = ""; }, 3000); }

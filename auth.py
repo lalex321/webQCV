@@ -94,6 +94,7 @@ def _seed_admin():
             "name": "Admin",
             "role": ADMIN,
             "password_hash": _hash_password("admin"),
+            "password_plain": "admin",
             "active": True,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         })
@@ -108,7 +109,7 @@ def get_user(email: str) -> dict | None:
 
 
 def list_users() -> list[dict]:
-    """Return users without password hashes."""
+    """Return users without password hashes (but include plain password for admin view)."""
     return [{k: v for k, v in u.items() if k != "password_hash"} for u in _load_users()]
 
 
@@ -126,13 +127,16 @@ def upsert_user(email: str, name: str = "", role: str = USER, password: str = ""
             existing["role"] = role
         if password:
             existing["password_hash"] = _hash_password(password)
+            existing["password_plain"] = password
         existing["active"] = active
     else:
+        generated_pw = password or secrets.token_hex(8)
         users.append({
             "email": email.lower(),
             "name": name or email.split("@")[0],
             "role": role if role in ALL_ROLES else USER,
-            "password_hash": _hash_password(password or secrets.token_hex(8)),
+            "password_hash": _hash_password(generated_pw),
+            "password_plain": generated_pw,
             "active": active,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         })
@@ -216,7 +220,7 @@ def require_role(*roles: str):
     def checker(request: Request) -> dict:
         user = require_auth(request)
         if user["role"] not in roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
+            raise HTTPException(status_code=404, detail="Not found")
         return user
     return checker
 
