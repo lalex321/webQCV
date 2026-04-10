@@ -77,16 +77,19 @@ function render() {
 }
 
 async function saveUser(email, tr) {
-  var body = { email: email };
-  body.name = tr.querySelector('[data-field="name"]').value.trim();
-  body.role = tr.querySelector('[data-field="role"]').value;
-  body.active = tr.querySelector('[data-field="active"]').checked;
-  var pw = tr.querySelector('[data-field="password"]').value;
-  if (pw) body.password = pw;
-  var r = await fetch("/api/auth/users/" + encodeURIComponent(email), {
-    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
-  });
-  if (r.ok) { msg("Saved", "ok"); load(); } else { msg("Error: " + (await r.json()).detail, "err"); }
+  try {
+    var body = { email: email };
+    body.name = tr.querySelector('[data-field="name"]').value.trim();
+    body.role = tr.querySelector('[data-field="role"]').value;
+    body.active = tr.querySelector('[data-field="active"]').checked;
+    var pw = tr.querySelector('[data-field="password"]').value;
+    if (pw) body.password = pw;
+    var r = await fetch("/api/auth/users/" + encodeURIComponent(email), {
+      method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+    });
+    if (r.ok) { msg("Saved: " + email + " role=" + body.role, "ok"); load(); }
+    else { var d = await r.json(); msg("Error " + r.status + ": " + (d.detail || JSON.stringify(d)), "err"); }
+  } catch(e) { msg("Network error: " + e, "err"); }
 }
 
 async function delUser(email) {
