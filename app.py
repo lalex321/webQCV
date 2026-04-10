@@ -1050,7 +1050,11 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     global _embed_ids, _embed_matrix, _store_cache
     _load_embed_cache()
     _load_employees()
-    _store_cache = None  # force reload on next access
+    # Force full cache rebuild
+    global _store_cache_ready
+    _store_cache = []
+    _store_cache_ready = False
+    _store_cache_init()
     return {"ok": True, "extracted": extracted}
 
 
