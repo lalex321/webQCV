@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Q-CV Usage Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #222; padding: 20px; }
+    h1 { font-size: 22px; margin-bottom: 16px; }
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 10px; color: #555; }
+    a { color: #4a7cff; }
+
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .header a { font-size: 13px; }
+
+    /* Summary cards */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card .label { font-size: 12px; color: #888; margin-bottom: 4px; }
+    .card .value { font-size: 26px; font-weight: 700; }
+    .card .sub { font-size: 11px; color: #999; margin-top: 2px; }
+    .card.green .value { color: #22c55e; }
+    .card.red .value { color: #ef4444; }
+    .card.blue .value { color: #3b82f6; }
+
+    /* Charts grid */
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .chart-box { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .chart-box.wide { grid-column: 1 / -1; }
+    .chart-box canvas { max-height: 260px; }
+
+    /* Tables */
+    .tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .tbl-box { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: auto; max-height: 400px; }
+    .tbl-box.wide { grid-column: 1 / -1; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #eee; white-space: nowrap; }
+    th { font-weight: 600; color: #666; position: sticky; top: 0; background: #fff; }
+    td.err { white-space: normal; max-width: 300px; color: #b91c1c; font-size: 11px; }
+    tr:hover { background: #f9fafb; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge.done { background: #dcfce7; color: #166534; }
+    .badge.failed { background: #fee2e2; color: #991b1b; }
+    .badge.started { background: #dbeafe; color: #1e40af; }
+    .badge.other { background: #f3f4f6; color: #374151; }
+
+    @media (max-width: 900px) {
+      .charts, .tables { grid-template-columns: 1fr; }
+      .chart-box.wide, .tbl-box.wide { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Usage Dashboard</h1>
+  <a href="/">&larr; Back to app</a>
+</div>
+
+<div class="cards" id="cards"></div>
+
+<div class="charts">
+  <div class="chart-box wide">
+    <h2>Daily Activity (last 30 days)</h2>
+    <canvas id="dailyChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h2>By Hour of Day</h2>
+    <canvas id="hourChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h2>Options Usage</h2>
+    <canvas id="optionsChart"></canvas>
+  </div>
+</div>
+
+<div class="tables">
+  <div class="tbl-box">
+    <h2>Top Users</h2>
+    <table id="usersTable"><thead><tr><th>User</th><th>Jobs</th><th>Bar</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="tbl-box">
+    <h2>Templates</h2>
+    <table id="templatesTable"><thead><tr><th>Template</th><th>Count</th><th>Bar</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div class="tables">
+  <div class="tbl-box wide" style="max-height:500px">
+    <h2>Recent Errors</h2>
+    <table id="errorsTable"><thead><tr><th>Time</th><th>User</th><th>File</th><th>Error</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div class="tables">
+  <div class="tbl-box wide" style="max-height:600px">
+    <h2>Recent Events</h2>
+    <table id="recentTable"><thead><tr><th>Time</th><th>Event</th><th>User</th><th>File</th><th>Template</th><th>Tailor</th><th>Duration</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<script>
+const COLORS = {done:"#22c55e", failed:"#ef4444", started:"#3b82f6"};
+
+function esc(s) { var d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+function shortUser(u) { return (u||"").replace(/@.*/, ""); }
+function barHTML(val, max, color) {
+  var pct = max ? Math.round(val/max*100) : 0;
+  return '<div style="background:#f3f4f6;border-radius:3px;height:14px;width:120px;display:inline-block">' +
+    '<div style="background:'+(color||"#3b82f6")+';height:100%;border-radius:3px;width:'+pct+'%"></div></div>';
+}
+function badgeHTML(ev) {
+  var cls = (ev==="done"||ev==="failed"||ev==="started") ? ev : "other";
+  return '<span class="badge '+cls+'">'+esc(ev)+'</span>';
+}
+function shortTS(ts) { return (ts||"").replace("T"," ").slice(0,16); }
+
+async function load() {
+  var r = await fetch("/admin/usage/data");
+  var d = await r.json();
+  var s = d.summary;
+
+  // Cards
+  var cards = [
+    {label:"Total Jobs", value:s.total, cls:""},
+    {label:"Today", value:s.today, cls:"blue"},
+    {label:"This Week", value:s.week, cls:"blue"},
+    {label:"Done", value:s.done, cls:"green", sub:s.success_rate+"%"},
+    {label:"Failed", value:s.failed, cls:"red"},
+    {label:"Users", value:s.unique_users, cls:""},
+    {label:"Avg Duration", value:s.avg_duration+"s", cls:""},
+  ];
+  document.getElementById("cards").innerHTML = cards.map(function(c) {
+    return '<div class="card '+c.cls+'"><div class="label">'+c.label+'</div><div class="value">'+c.value+'</div>'
+      +(c.sub?'<div class="sub">success rate: '+c.sub+'</div>':'')+'</div>';
+  }).join("");
+
+  // Daily chart
+  new Chart(document.getElementById("dailyChart"), {
+    type: "bar",
+    data: {
+      labels: d.daily.map(function(x){return x.date.slice(5);}),
+      datasets: [
+        {label:"Done", data:d.daily.map(function(x){return x.done;}), backgroundColor:COLORS.done, borderRadius:3},
+        {label:"Failed", data:d.daily.map(function(x){return x.failed;}), backgroundColor:COLORS.failed, borderRadius:3},
+      ]
+    },
+    options: {responsive:true, plugins:{legend:{position:"top"}}, scales:{x:{stacked:true}, y:{stacked:true, beginAtZero:true}}}
+  });
+
+  // Hour chart
+  new Chart(document.getElementById("hourChart"), {
+    type: "bar",
+    data: {
+      labels: d.hours.map(function(_,i){return i+"h";}),
+      datasets: [{label:"Jobs", data:d.hours, backgroundColor:"#60a5fa", borderRadius:2}]
+    },
+    options: {responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}
+  });
+
+  // Options chart
+  var opt = d.options;
+  new Chart(document.getElementById("optionsChart"), {
+    type: "doughnut",
+    data: {
+      labels: ["Tailor", "Anonymize", "Autofix", "Plain"],
+      datasets: [{
+        data: [opt.tailor, opt.anonymize, opt.autofix, Math.max(0, opt.total - opt.tailor - opt.anonymize - opt.autofix)],
+        backgroundColor: ["#8b5cf6", "#f59e0b", "#06b6d4", "#d1d5db"]
+      }]
+    },
+    options: {responsive:true, plugins:{legend:{position:"bottom"}}}
+  });
+
+  // Users table
+  var maxU = d.top_users.length ? d.top_users[0].count : 1;
+  document.querySelector("#usersTable tbody").innerHTML = d.top_users.map(function(u) {
+    return "<tr><td>"+esc(shortUser(u.user))+"</td><td>"+u.count+"</td><td>"+barHTML(u.count, maxU)+"</td></tr>";
+  }).join("");
+
+  // Templates table
+  var maxT = d.templates.length ? d.templates[0].count : 1;
+  document.querySelector("#templatesTable tbody").innerHTML = d.templates.map(function(t) {
+    return "<tr><td>"+esc(t.name)+"</td><td>"+t.count+"</td><td>"+barHTML(t.count, maxT, "#8b5cf6")+"</td></tr>";
+  }).join("");
+
+  // Errors table
+  document.querySelector("#errorsTable tbody").innerHTML = d.recent_errors.length
+    ? d.recent_errors.map(function(e) {
+        return "<tr><td>"+shortTS(e.ts)+"</td><td>"+esc(shortUser(e.user))+"</td><td>"+esc(e.file)+"</td><td class='err'>"+esc(e.error)+"</td></tr>";
+      }).join("")
+    : "<tr><td colspan=4 style='color:#999'>No errors</td></tr>";
+
+  // Recent events
+  document.querySelector("#recentTable tbody").innerHTML = d.recent.map(function(e) {
+    return "<tr><td>"+shortTS(e.ts)+"</td><td>"+badgeHTML(e.event)+"</td><td>"+esc(shortUser(e.user))+"</td><td>"+esc(e.file)+"</td>"
+      +"<td>"+esc((e.template||"").replace(".docx",""))+"</td><td>"+(e.tailor?"Yes":"")+"</td><td>"+(e.duration||"")+"</td></tr>";
+  }).join("");
+}
+
+load();
+</script>
+</body>
+</html>

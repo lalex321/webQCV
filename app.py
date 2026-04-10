@@ -345,94 +345,113 @@ async def gemini_proxy_upload(request: Request, path: str):
     return await _proxy_to_gemini(request, f"upload/{path}")
 
 
+@app.get("/admin/usage/data")
+def admin_usage_data(request: Request):
+    """Return usage stats as JSON for the dashboard."""
+    _auth.require_role(_auth.ADMIN)(request)
+    events = _read_usage_events()
+
+    started = [e for e in events if e.get("event") == "started"]
+    done = [e for e in events if e.get("event") == "done"]
+    failed = [e for e in events if e.get("event") == "failed"]
+
+    # Durations
+    durations = [e["duration_sec"] for e in done if e.get("duration_sec")]
+    avg_dur = round(sum(durations) / len(durations), 1) if durations else 0
+
+    # Unique users
+    users = Counter(e.get("user") or e.get("ip", "unknown") for e in started)
+    unique_users = len(users)
+
+    # Today / this week
+    today = time.strftime("%Y-%m-%d")
+    week_ago = time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400))
+    today_jobs = sum(1 for e in started if e.get("ts", "").startswith(today))
+    week_jobs = sum(1 for e in started if e.get("ts", "")[:10] >= week_ago)
+
+    # Daily activity (last 30 days)
+    day_counter: dict[str, dict] = {}
+    for e in events:
+        day = e.get("ts", "")[:10]
+        if not day:
+            continue
+        if day not in day_counter:
+            day_counter[day] = {"done": 0, "failed": 0, "started": 0}
+        ev = e.get("event", "")
+        if ev in day_counter[day]:
+            day_counter[day][ev] += 1
+    # Last 30 days only
+    cutoff_30 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 30 * 86400))
+    daily = sorted(
+        [(d, c) for d, c in day_counter.items() if d >= cutoff_30],
+        key=lambda x: x[0],
+    )
+
+    # Hourly distribution
+    hours = [0] * 24
+    for e in started:
+        ts = e.get("ts", "")
+        if len(ts) >= 13:
+            try:
+                hours[int(ts[11:13])] += 1
+            except (ValueError, IndexError):
+                pass
+
+    # Top users
+    top_users = users.most_common(20)
+
+    # Templates
+    templates = Counter(
+        (e.get("template") or "").replace(".docx", "")
+        for e in started if e.get("template")
+    ).most_common(10)
+
+    # Options usage
+    tailor_count = sum(1 for e in started if e.get("tailor"))
+    anon_count = sum(1 for e in started if e.get("anonymize"))
+    autofix_count = sum(1 for e in started if e.get("autofix"))
+    total = len(started) or 1
+
+    # Recent errors
+    recent_errors = [
+        {"ts": e.get("ts", ""), "user": e.get("user", ""), "file": e.get("file", ""),
+         "error": e.get("error", ""), "duration": e.get("duration_sec", "")}
+        for e in reversed(failed)
+    ][:20]
+
+    # Recent events (last 100)
+    recent = [
+        {"ts": e.get("ts", ""), "event": e.get("event", ""), "user": e.get("user", ""),
+         "file": e.get("file", ""), "template": e.get("template", ""),
+         "duration": e.get("duration_sec", ""), "tailor": e.get("tailor", False),
+         "error": e.get("error", "")}
+        for e in reversed(events)
+    ][:100]
+
+    return {
+        "summary": {
+            "total": len(started), "done": len(done), "failed": len(failed),
+            "today": today_jobs, "week": week_jobs,
+            "unique_users": unique_users, "avg_duration": avg_dur,
+            "success_rate": round(len(done) / total * 100, 1),
+        },
+        "daily": [{"date": d, **c} for d, c in daily],
+        "hours": hours,
+        "top_users": [{"user": u, "count": c} for u, c in top_users],
+        "templates": [{"name": n, "count": c} for n, c in templates],
+        "options": {
+            "tailor": tailor_count, "anonymize": anon_count,
+            "autofix": autofix_count, "total": len(started),
+        },
+        "recent_errors": recent_errors,
+        "recent": recent,
+    }
+
+
 @app.get("/admin/usage", response_class=HTMLResponse)
 def admin_usage(request: Request):
     _auth.require_role(_auth.ADMIN)(request)
-    events = _read_usage_events()
-    total_jobs = sum(1 for e in events if e.get("event") == "started")
-    done_jobs = sum(1 for e in events if e.get("event") == "done")
-    failed_jobs = sum(1 for e in events if e.get("event") == "failed")
-    unique_ips = len({str(e.get("ip") or "") for e in events if e.get("ip")})
-
-    template_counter = Counter(
-        str(e.get("template") or "")
-        for e in events
-        if e.get("event") == "started" and e.get("template")
-    )
-    top_templates = template_counter.most_common(10)
-    recent_events = list(reversed(events))
-
-    rows = []
-    for item in recent_events:
-        rows.append(
-            "<tr>"
-            f"<td>{escape(str(item.get('ts', '')))}</td>"
-            f"<td>{escape(str(item.get('event', '')))}</td>"
-            f"<td>{escape(str(item.get('job_id', ''))[:8])}</td>"
-            f"<td>{escape(str(item.get('ip', '')))}</td>"
-            f"<td>{escape(str(item.get('file', '')))}</td>"
-            f"<td>{escape(str(item.get('template', '')))}</td>"
-            f"<td>{escape(str(item.get('anonymize', '')))}</td>"
-            f"<td>{escape(str(item.get('autofix', '')))}</td>"
-            f"<td>{escape(str(item.get('duration_sec', '')))}</td>"
-            f"<td>{escape(str(item.get('error', '')))}</td>"
-            "</tr>"
-        )
-
-    top_templates_html = "".join(
-        f"<li><strong>{escape(name)}</strong> — {count}</li>"
-        for name, count in top_templates
-    ) or "<li>No data</li>"
-
-    html = f"""
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Q-CV Usage Admin</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 24px; color: #222; }}
-    h1 {{ margin-bottom: 8px; }}
-    .stats {{ display: flex; gap: 12px; flex-wrap: wrap; margin: 18px 0 24px; }}
-    .card {{ border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; min-width: 140px; }}
-    .card .v {{ font-size: 24px; font-weight: 700; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
-    th, td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }}
-    th {{ background: #f5f5f5; position: sticky; top: 0; }}
-    .table-wrap {{ overflow: auto; max-height: 70vh; }}
-    ul {{ margin-top: 8px; }}
-  </style>
-</head>
-<body>
-  <h1>Q-CV Usage</h1>
-  <div class="stats">
-    <div class="card"><div>Total jobs</div><div class="v">{total_jobs}</div></div>
-    <div class="card"><div>Done</div><div class="v">{done_jobs}</div></div>
-    <div class="card"><div>Failed</div><div class="v">{failed_jobs}</div></div>
-    <div class="card"><div>Unique IPs</div><div class="v">{unique_ips}</div></div>
-  </div>
-
-  <h2>Top templates</h2>
-  <ul>{top_templates_html}</ul>
-
-  <h2>All log entries</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ts</th><th>event</th><th>job</th><th>ip</th><th>file</th><th>template</th>
-          <th>anon</th><th>autofix</th><th>sec</th><th>error</th>
-        </tr>
-      </thead>
-      <tbody>
-        {''.join(rows)}
-      </tbody>
-    </table>
-  </div>
-</body>
-</html>
-"""
-    return HTMLResponse(html)
+    return HTMLResponse((Path(__file__).parent / "templates" / "admin_usage.html").read_text(encoding="utf-8"))
 
 
 @app.get("/admin/prompts")
