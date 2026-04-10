@@ -2704,6 +2704,13 @@
       batchBtns.analyze.disabled = !n;
       batchBtns.generate.disabled = !n;
       batchBtns.del.disabled = !n;
+      var countEl = document.getElementById("batchCount");
+      if (countEl) {
+        var base = batchFiltered.length === batchData.length
+          ? batchData.length + " CVs"
+          : batchFiltered.length + " / " + batchData.length + " CVs";
+        countEl.textContent = n ? n + " selected | " + base : base;
+      }
     }
 
     function batchFilter() {
