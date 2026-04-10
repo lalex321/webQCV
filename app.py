@@ -1034,7 +1034,7 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     extracted = 0
     for name in zf.namelist():
         # Only allow known directories
-        if not any(name.startswith(p) for p in ("_store/", "_jd_store/", "_cache/", "_users.json")):
+        if not any(name.startswith(p) for p in ("_store/", "_jd_store/", "_cache/", "_users.json", "_employees.json")):
             continue
         target = DATA_DIR / name
         if name.endswith("/"):
@@ -1049,6 +1049,7 @@ async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     # Reload caches
     global _embed_ids, _embed_matrix, _store_cache
     _load_embed_cache()
+    _load_employees()
     _store_cache = None  # force reload on next access
     return {"ok": True, "extracted": extracted}
 
@@ -1081,6 +1082,66 @@ document.getElementById("f").addEventListener("submit", async function(e) {
   } catch(ex) { document.getElementById("msg").textContent = "Error: " + ex; }
 });
 </script></body></html>""", media_type="text/html")
+
+
+# ── Employee Directory ────────────────────────────────────────────────────────
+
+EMPLOYEES_PATH = DATA_DIR / "_employees.json"
+_employees_cache: list[dict] = []
+
+def _load_employees():
+    global _employees_cache
+    if EMPLOYEES_PATH.exists():
+        _employees_cache = json.loads(EMPLOYEES_PATH.read_text(encoding="utf-8"))
+    return _employees_cache
+
+def _save_employees(data: list[dict]):
+    global _employees_cache
+    _employees_cache = data
+    EMPLOYEES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+_load_employees()
+
+
+@app.post("/admin/upload_employees")
+async def admin_upload_employees(request: Request, file: UploadFile = File(...)):
+    """Upload employees.xlsx, parse and save as _employees.json."""
+    _auth.require_role(_auth.ADMIN)(request)
+    import openpyxl, io
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+    except Exception:
+        raise HTTPException(400, "Invalid xlsx file")
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    if len(rows) < 2:
+        raise HTTPException(400, "Empty spreadsheet")
+    headers = [str(h or "").strip() for h in rows[0]]
+    employees = []
+    for row in rows[1:]:
+        rec = {}
+        for i, val in enumerate(row):
+            if i < len(headers) and headers[i]:
+                key = headers[i].lower()
+                if hasattr(val, "isoformat"):
+                    val = val.isoformat()[:10]
+                rec[key] = val
+        if rec.get("employee_name"):
+            employees.append(rec)
+    _save_employees(employees)
+    return {"ok": True, "count": len(employees)}
+
+
+@app.get("/admin/employees")
+def list_employees(request: Request, q: str = ""):
+    """Return employee directory, optionally filtered."""
+    _auth.require_auth(request)
+    data = _employees_cache or _load_employees()
+    if q:
+        q_lower = q.lower()
+        data = [e for e in data if q_lower in json.dumps(e, ensure_ascii=False, default=str).lower()]
+    return {"employees": data, "total": len(_employees_cache)}
 
 
 # ── JD Store ──────────────────────────────────────────────────────────────────
