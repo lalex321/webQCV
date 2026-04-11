@@ -665,7 +665,7 @@ def delete_store_item(store_id: str, request: Request):
     return {"ok": True}
 
 
-_EDITABLE_META_FIELDS = {"comments", "company"}
+_EDITABLE_META_FIELDS = {"comments", "company", "name"}
 
 @app.patch("/store/{store_id}/meta")
 async def update_store_meta(store_id: str, request: Request):
@@ -683,11 +683,18 @@ async def update_store_meta(store_id: str, request: Request):
         data = json.loads(p.read_text(encoding="utf-8"))
         data["_meta"][field] = value
         data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if field == "name":
+            ci = data.get("contact_information")
+            if isinstance(ci, dict):
+                ci["name"] = value
+            data["_meta"]["search_text"] = _build_search_text(data)
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         cached = _store_cache_get_meta(store_id)
         if cached:
             cached[field] = value
             cached["date"] = data["_meta"]["date"]
+            if field == "name":
+                cached["search_text"] = data["_meta"]["search_text"]
     return {"ok": True}
 
 
