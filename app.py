@@ -1903,16 +1903,15 @@ def _build_projects_section(cv_data: dict) -> list[dict] | None:
     positions = [p for p in _positions_cache if (p.get("employee_name") or "").lower() == name_lower]
     if not positions:
         return None
-    # Sort: active first (Assigned/Booked), then by date desc
-    status_order = {"Assigned": 0, "Booked": 1, "Proposed": 2, "Requested": 3, "Ended": 4}
-    # Sort: active statuses first, then by close date descending (most recent first)
+    # Sort: active first, then by close date descending (most recent first)
+    status_order = {"Assigned": 0, "Booked": 1, "Proposed": 2, "Requested": 3, "Ended": 4, "Cancelled": 5}
     positions.sort(key=lambda p: (
-        status_order.get(p.get("workload_status", ""), 9),
-        "".join(chr(255 - ord(c)) for c in (p.get("wd_close_date") or "0000-00-00")),
+        status_order.get(p.get("status") or p.get("workload_status", ""), 9),
+        "".join(chr(255 - ord(c)) for c in (p.get("close_date") or p.get("wd_close_date") or "0000-00-00")),
     ))
     import calendar
     def _fmt_month(ym: str) -> str:
-        """Convert '2026-01' to 'January 2026'."""
+        """Convert '2026-01' to 'Jan 2026'."""
         try:
             parts = ym.split("-")
             return f"{calendar.month_abbr[int(parts[1])]} {parts[0]}"
@@ -1921,12 +1920,16 @@ def _build_projects_section(cv_data: dict) -> list[dict] | None:
 
     rows = []
     for p in positions:
-        account = p.get("account", "")
-        role = p.get("position_code", "")
-        start = (p.get("wd_open_date") or "")[:7]
-        end = (p.get("wd_close_date") or "")[:7]
+        # Support both old (xlsx) and new (API) field names
+        account = p.get("account_name") or p.get("account", "")
+        project = p.get("project_name", "")
+        detail = f"{account} — {project}" if project else account
+        start = (p.get("open_date") or p.get("wd_open_date") or "")[:7]
+        end = (p.get("close_date") or p.get("wd_close_date") or "")[:7]
+        if end and end.startswith("9999"):
+            end = ""
         period = _fmt_month(start) + (" – " + _fmt_month(end) if end and end != start else "")
-        rows.append({"period": period, "detail": f"{account} — {role}"})
+        rows.append({"period": period, "detail": detail})
     return [{"title": "Projects (Quantori Staffing)", "items": [], "_table_rows": rows}]
 
 
