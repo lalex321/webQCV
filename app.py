@@ -665,7 +665,7 @@ def delete_store_item(store_id: str, request: Request):
     return {"ok": True}
 
 
-_EDITABLE_META_FIELDS = {"comments"}
+_EDITABLE_META_FIELDS = {"comments", "company"}
 
 @app.patch("/store/{store_id}/meta")
 async def update_store_meta(store_id: str, request: Request):
@@ -682,10 +682,12 @@ async def update_store_meta(store_id: str, request: Request):
             raise HTTPException(status_code=404, detail="Not found")
         data = json.loads(p.read_text(encoding="utf-8"))
         data["_meta"][field] = value
+        data["_meta"]["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         cached = _store_cache_get_meta(store_id)
         if cached:
             cached[field] = value
+            cached["date"] = data["_meta"]["date"]
     return {"ok": True}
 
 
@@ -1108,6 +1110,31 @@ document.getElementById("f").addEventListener("submit", async function(e) {
   } catch(ex) { document.getElementById("msg").textContent = "Error: " + ex; }
 });
 </script></body></html>""", media_type="text/html")
+
+
+@app.get("/admin/download_data")
+def admin_download_data(request: Request):
+    """Download a zip archive of _store/, _jd_store/, _employees.json, _positions.json."""
+    _auth.require_role(_auth.ADMIN)(request)
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for folder in ("_store", "_jd_store"):
+            folder_path = DATA_DIR / folder
+            if folder_path.exists():
+                for p in folder_path.glob("*.json"):
+                    zf.write(p, f"{folder}/{p.name}")
+        for fname in ("_employees.json", "_positions.json", "_users.json"):
+            fp = DATA_DIR / fname
+            if fp.exists():
+                zf.write(fp, fname)
+    buf.seek(0)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return RawResponse(
+        content=buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="qcv_backup_{ts}.zip"'},
+    )
 
 
 # ── Employee Directory ────────────────────────────────────────────────────────

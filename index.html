@@ -2685,7 +2685,7 @@
       { key: "key_match", label: "Keys", width: 4, hiddenByDefault: true },
       { key: "match_pct", label: "Match", width: 5 },
       { key: "role", label: "Role", width: 16 },
-      { key: "company", label: "Company", width: 12 },
+      { key: "company", label: "Company", editable: true, width: 12 },
       { key: "source_filename", label: "File", width: 12 },
       { key: "comments", label: "Comments", editable: true, width: 18 },
       { key: "date", label: "Date", tooltip: "Last updated", width: 10 },
@@ -3143,7 +3143,16 @@
             body: JSON.stringify({ field: field, value: newVal })
           });
           var item = batchData.find(function(m) { return m.id === storeId; });
-          if (item) item[field] = newVal;
+          if (item) {
+            item[field] = newVal;
+            // Update name color if comments changed
+            if (field === "comments") {
+              var nameCell = cell.closest("tr").querySelector(".name-cell");
+              if (nameCell) {
+                nameCell.style.color = (newVal || "").toLowerCase().indexOf("active") >= 0 ? "#2563eb" : "";
+              }
+            }
+          }
         }
       }
       input.addEventListener("blur", save);
