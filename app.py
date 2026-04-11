@@ -240,6 +240,22 @@ def _cleanup_loop():
 threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 
+def _build_search_text(data):
+    """Build search_text from CV data (name, title, company, skills, filename, comments)."""
+    meta = data.get("_meta", {})
+    basics = data.get("basics", {})
+    exp = data.get("experience", [])
+    skills_text = json.dumps(data.get("skills", {}), ensure_ascii=False).lower()
+    return " ".join([
+        basics.get("name", "") or meta.get("name", ""),
+        basics.get("current_title", ""),
+        exp[0].get("company_name", "") if exp else "",
+        meta.get("source_filename", ""),
+        meta.get("comments", ""),
+        skills_text,
+    ]).lower()
+
+
 def _backfill_search_text():
     """One-time migration: add search_text to store entries that lack it."""
     for p in STORE_DIR.glob("*.json"):
