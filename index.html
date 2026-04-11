@@ -3007,10 +3007,51 @@
           batchLastChecked = cb;
           updateBatchBtns();
         });
-        tr.querySelector(".name-cell").addEventListener("click", function() {
-          if (m.match_pct || m.tailored || m.analyzed) { openStoredTailorSession(m.id); }
-          else { openStoredCv(m.id); }
-        });
+        (function(nameCell, mRef) {
+          var clickTimer = null;
+          nameCell.addEventListener("click", function() {
+            if (nameCell.classList.contains("editing")) return;
+            if (clickTimer) clearTimeout(clickTimer);
+            clickTimer = setTimeout(function() {
+              clickTimer = null;
+              if (mRef.match_pct || mRef.tailored || mRef.analyzed) { openStoredTailorSession(mRef.id); }
+              else { openStoredCv(mRef.id); }
+            }, 250);
+          });
+          nameCell.addEventListener("dblclick", function(e) {
+            e.stopPropagation();
+            if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+            if (nameCell.classList.contains("editing")) return;
+            nameCell.classList.add("editing");
+            var oldVal = mRef.name || "";
+            var input = document.createElement("input");
+            input.type = "text";
+            input.value = oldVal;
+            input.style.cssText = "width:100%;font-size:inherit;font-family:inherit;padding:2px;border:1px solid var(--primary);border-radius:3px;box-sizing:border-box";
+            nameCell.textContent = "";
+            nameCell.appendChild(input);
+            input.focus();
+            input.select();
+            function save() {
+              var newVal = input.value.trim();
+              nameCell.classList.remove("editing");
+              nameCell.textContent = newVal || oldVal;
+              if (newVal && newVal !== oldVal) {
+                fetch("/store/" + mRef.id + "/meta", {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ field: "name", value: newVal })
+                });
+                mRef.name = newVal;
+              }
+            }
+            input.addEventListener("blur", save);
+            input.addEventListener("keydown", function(ev) {
+              if (ev.key === "Escape") { nameCell.classList.remove("editing"); nameCell.textContent = oldVal; }
+              if (ev.key === "Enter") { ev.preventDefault(); save(); }
+            });
+          });
+        })(tr.querySelector(".name-cell"), m);
         batchBody.appendChild(tr);
         // Restore checked state
         if (checkedIds.has(m.id)) {
