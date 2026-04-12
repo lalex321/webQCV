@@ -3590,8 +3590,8 @@
         statusBarFile.textContent = data._meta && data._meta.name || "";
         setPrimaryAction("idle");
 
-        // Restore tailor checkbox from user's last preference
-        tailorInput.checked = localStorage.getItem(STORAGE_KEYS.tailor) === "1";
+        // Force tailor mode ON when opening a session with gap data — user's intent is to see the fit
+        tailorInput.checked = !!gapData;
         jdField.classList.toggle("hidden", !tailorInput.checked);
         document.getElementById("pageRoot").classList.toggle("tailor-mode", tailorInput.checked);
         if (selJdId) {
@@ -3610,7 +3610,7 @@
         // Set up preloaded state so form submit sends JSON with skip_gap
         var savedEdits = { checked_skills: session.focus_skills || [] };
         preloadedFitJson = { gap_analysis: gapData, user_edits: savedEdits };
-        if (tailorInput.checked) {
+        if (gapData) {
           hasGapData = true;
           renderGapAnalysis(gapData, savedEdits);
         } else {
