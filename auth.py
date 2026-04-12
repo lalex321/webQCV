@@ -73,7 +73,16 @@ def _load_users() -> list[dict]:
             return _users_cache
         p = _users_path()
         if p.exists():
-            _users_cache = json.loads(p.read_text(encoding="utf-8"))
+            users = json.loads(p.read_text(encoding="utf-8"))
+            # One-time migration: strip legacy plaintext passwords from disk.
+            dirty = False
+            for u in users:
+                if "password_plain" in u:
+                    del u["password_plain"]
+                    dirty = True
+            _users_cache = users
+            if dirty:
+                p.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
         else:
             _users_cache = []
         return _users_cache
@@ -94,7 +103,6 @@ def _seed_admin():
             "name": "Admin",
             "role": ADMIN,
             "password_hash": _hash_password("admin"),
-            "password_plain": "admin",
             "active": True,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         })
@@ -108,9 +116,12 @@ def get_user(email: str) -> dict | None:
     return None
 
 
+_USER_SECRET_FIELDS = {"password_hash", "password_plain"}
+
+
 def list_users() -> list[dict]:
-    """Return users without password hashes (but include plain password for admin view)."""
-    return [{k: v for k, v in u.items() if k != "password_hash"} for u in _load_users()]
+    """Return users without any password material."""
+    return [{k: v for k, v in u.items() if k not in _USER_SECRET_FIELDS} for u in _load_users()]
 
 
 def upsert_user(email: str, name: str = "", role: str = USER, password: str = "", active: bool = True) -> dict:
@@ -127,7 +138,6 @@ def upsert_user(email: str, name: str = "", role: str = USER, password: str = ""
             existing["role"] = role
         if password:
             existing["password_hash"] = _hash_password(password)
-            existing["password_plain"] = password
         existing["active"] = active
     else:
         generated_pw = password or secrets.token_hex(8)
@@ -136,7 +146,6 @@ def upsert_user(email: str, name: str = "", role: str = USER, password: str = ""
             "name": name or email.split("@")[0],
             "role": role if role in ALL_ROLES else USER,
             "password_hash": _hash_password(generated_pw),
-            "password_plain": generated_pw,
             "active": active,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         })

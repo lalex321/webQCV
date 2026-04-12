@@ -765,7 +765,6 @@
               <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Role</th>
               <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Active</th>
               <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Created</th>
-              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Password</th>
               <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">New Password</th>
               <th style="padding:6px 10px;border-bottom:1px solid #e2e8f0"></th>
             </tr>
@@ -876,7 +875,7 @@
         <div style="display:flex;align-items:center;gap:10px;padding:10px 24px;border-bottom:1px solid #e2e8f0;flex-shrink:0">
           <h3 style="margin:0;font-size:14px">Swagger / OpenAPI</h3>
           <span style="font-size:12px;color:#64748b">Live API documentation with Try-it-out.</span>
-          <a href="/docs" target="_blank" class="admin-btn ghost" style="margin-left:auto">Open in new tab ↗</a>
+          <a href="/admin/docs" target="_blank" class="admin-btn ghost" style="margin-left:auto">Open in new tab ↗</a>
         </div>
         <iframe id="adminSwaggerFrame" style="flex:1;width:100%;border:0;background:#fff" src="about:blank"></iframe>
       </div>
@@ -2618,7 +2617,11 @@
         localStorage.setItem("activeTab", btn.dataset.pane);
         if (btn.dataset.pane === "paneBatch" && !batchPollInterval) loadBatchStore();
         if (btn.dataset.pane === "paneJD" && !jdDataLoaded) loadJDStore();
-        if (btn.dataset.pane === "paneAdmin") loadKeys();
+        if (btn.dataset.pane === "paneAdmin") {
+          // Trigger loader for whichever admin sub-tab is currently active.
+          var activeSub = document.querySelector(".admin-subtab-btn.active");
+          if (activeSub) activeSub.click();
+        }
       });
     });
 
@@ -2636,7 +2639,7 @@
         if (btn.dataset.subpane === "adminStaffing") loadStaffingStats();
         if (btn.dataset.subpane === "adminSwagger") {
           var fr = document.getElementById("adminSwaggerFrame");
-          if (fr && fr.src !== location.origin + "/docs") fr.src = "/docs";
+          if (fr && fr.src !== location.origin + "/admin/docs") fr.src = "/admin/docs";
         }
       });
     });
@@ -3730,8 +3733,7 @@
           '</select></td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="checkbox" data-field="active"' + (u.active ? " checked" : "") + '></td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;color:#64748b">' + (u.created || "").substring(0,10) + '</td>' +
-          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;color:#64748b;font-family:monospace">' + esc(u.password_plain || "") + '</td>' +
-          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="text" placeholder="new password" data-field="password" style="width:110px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px"></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="text" placeholder="set new password" data-field="password" style="width:130px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px"></td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap"><button class="admin-btn" data-save="' + esc(u.email) + '" type="button">Save</button> ' +
               '<button class="admin-btn ghost" data-del="' + esc(u.email) + '" type="button" style="color:#dc2626;border-color:#dc2626">Del</button></td>';
         tb.appendChild(tr);
@@ -4548,8 +4550,12 @@
       setPrimaryAction("idle");
       setStatus("Ready", 0, "");
 
-      // Restore last active tab
+      // Restore last active tab (migrate removed panePrompt → paneAdmin)
       var savedTab = localStorage.getItem("activeTab");
+      if (savedTab === "panePrompt") {
+        savedTab = "paneAdmin";
+        localStorage.setItem("activeTab", savedTab);
+      }
       if (savedTab && savedTab !== "paneConvert") {
         var tabBtn = document.querySelector('[data-pane="' + savedTab + '"]');
         if (tabBtn) tabBtn.click();

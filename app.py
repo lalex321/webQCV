@@ -34,7 +34,12 @@ STORE_DIR.mkdir(parents=True, exist_ok=True)
 JD_STORE_DIR.mkdir(parents=True, exist_ok=True)
 _auth.init(DATA_DIR)
 
-app = FastAPI(title="Q-CV Web Converter")
+app = FastAPI(
+    title="Q-CV Web Converter",
+    docs_url=None,       # disabled — see /admin/docs
+    redoc_url=None,
+    openapi_url=None,
+)
 app.mount("/images", StaticFiles(directory=APP_DIR / "images"), name="images")
 jobs = InMemoryJobStore()
 _SERVER_START = time.time()
@@ -1271,17 +1276,18 @@ async def admin_put_keys(request: Request):
     body = await request.json()
     gemini = (body.get("gemini") or "").strip()
     github = (body.get("github") or "").strip()
-    staffing_url = body.get("staffing_url")
+    # Treat empty string as "keep current" for all fields (match Gemini/GitHub behavior).
+    staffing_url = (body.get("staffing_url") or "").strip()
     staffing_token = (body.get("staffing_token") or "").strip()
 
     if gemini:
         (APP_DIR / ".api_key").write_text(gemini, encoding="utf-8")
     if github:
         (APP_DIR / ".github_token").write_text(github, encoding="utf-8")
-    if staffing_url is not None or staffing_token:
+    if staffing_url or staffing_token:
         cfg = _core.load_config()
-        if staffing_url is not None:
-            cfg["staffing_api_url"] = staffing_url.strip()
+        if staffing_url:
+            cfg["staffing_api_url"] = staffing_url
         if staffing_token:
             cfg["staffing_api_token"] = staffing_token
         _core.save_config(cfg)
@@ -1317,10 +1323,10 @@ def admin_staffing_stats(request: Request):
     No live API calls — reads files that staffing_sync wrote.
     """
     _auth.require_role(_auth.ADMIN)(request)
-    emps = _employees_cache or _load_employees()
-    pos = _positions_cache or _load_positions()
+    # Snapshot caches to avoid mutation during iteration if sync runs concurrently.
+    emps = list(_employees_cache or _load_employees())
+    pos = list(_positions_cache or _load_positions())
 
-    today = time.strftime("%Y-%m-%d")
     cutoff_90 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 90 * 86400))
     cutoff_24mo = time.strftime("%Y-%m", time.localtime(time.time() - 730 * 86400))
 
@@ -1328,7 +1334,7 @@ def admin_staffing_stats(request: Request):
     active = [e for e in emps if e.get("employment_status") == "Active"]
     dismissed = [e for e in emps if e.get("employment_status") == "Dismissed"]
     hired_90 = [e for e in emps if e.get("join_date", "") >= cutoff_90]
-    dismissed_90 = [e for e in emps if e.get("dismiss_date", "") >= cutoff_90 and e.get("dismiss_date")]
+    dismissed_90 = [e for e in emps if e.get("dismiss_date", "") >= cutoff_90]
 
     # Avg tenure of active (years)
     tenure_days = []
@@ -1413,6 +1419,22 @@ def admin_staffing_stats(request: Request):
             "positions_mtime": _mtime(POSITIONS_PATH),
         },
     }
+
+
+@app.get("/admin/openapi.json")
+def admin_openapi(request: Request):
+    """OpenAPI schema — admin only. Public /openapi.json is disabled."""
+    _auth.require_role(_auth.ADMIN)(request)
+    from fastapi.openapi.utils import get_openapi
+    return get_openapi(title=app.title, version="1.0", routes=app.routes)
+
+
+@app.get("/admin/docs", response_class=HTMLResponse)
+def admin_docs(request: Request):
+    """Swagger UI — admin only. Points at /admin/openapi.json."""
+    _auth.require_role(_auth.ADMIN)(request)
+    from fastapi.openapi.docs import get_swagger_ui_html
+    return get_swagger_ui_html(openapi_url="/admin/openapi.json", title=app.title + " — API")
 
 
 @app.post("/admin/sync_staffing")
