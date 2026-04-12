@@ -705,6 +705,8 @@
         <button class="admin-subtab-btn" data-subpane="adminUsers" type="button">Users</button>
         <button class="admin-subtab-btn" data-subpane="adminPrompts" type="button">Prompts</button>
         <button class="admin-subtab-btn" data-subpane="adminUsage" type="button">Usage</button>
+        <button class="admin-subtab-btn" data-subpane="adminStaffing" type="button">Staffing</button>
+        <button class="admin-subtab-btn" data-subpane="adminSwagger" type="button">Swagger</button>
       </div>
 
       <div class="admin-subpane" id="adminGeneral" style="padding:20px 24px;overflow-y:auto;flex:1;min-height:0">
@@ -829,6 +831,54 @@
           <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Recent Events</div>
           <table id="usageRecentTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Time</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Event</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">User</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">File</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Template</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Tailor</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Dur</th></tr></thead><tbody></tbody></table>
         </div>
+      </div>
+
+      <div class="admin-subpane hidden" id="adminStaffing" style="padding:20px 24px;overflow-y:auto;flex:1;min-height:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <h3 style="margin:0;font-size:14px">Staffing Statistics</h3>
+          <span id="staffingFileInfo" style="font-size:12px;color:#64748b"></span>
+          <button id="staffingRefreshBtn" class="admin-btn ghost" type="button" style="margin-left:auto">Refresh</button>
+        </div>
+        <div id="staffingCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px"></div>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Hires vs Dismissals (last 24 months)</div>
+            <canvas id="staffingMonthlyChart" style="max-height:220px"></canvas>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Billing Types (all positions)</div>
+            <canvas id="staffingBillingChart" style="max-height:220px"></canvas>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:360px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Resource Pools (active employees)</div>
+            <table id="staffingPoolsTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Pool</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Count</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:360px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Job Titles (active employees)</div>
+            <table id="staffingTitlesTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Title</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Count</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:360px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Top Accounts (by active positions)</div>
+            <table id="staffingAccountsTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Account</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Count</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:360px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Active Positions by Status</div>
+            <table id="staffingStatusTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Status</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Count</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="admin-subpane hidden" id="adminSwagger" style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 24px;border-bottom:1px solid #e2e8f0;flex-shrink:0">
+          <h3 style="margin:0;font-size:14px">Swagger / OpenAPI</h3>
+          <span style="font-size:12px;color:#64748b">Live API documentation with Try-it-out.</span>
+          <a href="/docs" target="_blank" class="admin-btn ghost" style="margin-left:auto">Open in new tab ↗</a>
+        </div>
+        <iframe id="adminSwaggerFrame" style="flex:1;width:100%;border:0;background:#fff" src="about:blank"></iframe>
       </div>
     </div>
 
@@ -2583,6 +2633,11 @@
         if (btn.dataset.subpane === "adminGeneral") loadKeys();
         if (btn.dataset.subpane === "adminUsers") loadUsers();
         if (btn.dataset.subpane === "adminUsage") loadUsage();
+        if (btn.dataset.subpane === "adminStaffing") loadStaffingStats();
+        if (btn.dataset.subpane === "adminSwagger") {
+          var fr = document.getElementById("adminSwaggerFrame");
+          if (fr && fr.src !== location.origin + "/docs") fr.src = "/docs";
+        }
       });
     });
 
@@ -3868,6 +3923,92 @@
     }
     var usageRefreshBtn = document.getElementById("usageRefreshBtn");
     if (usageRefreshBtn) usageRefreshBtn.addEventListener("click", loadUsage);
+
+    /* ── Staffing Statistics (Admin → Staffing) ── */
+    var _staffingCharts = { monthly:null, billing:null };
+    var _staffingLoading = false;
+    async function loadStaffingStats() {
+      if (_staffingLoading) return;
+      _staffingLoading = true;
+      try {
+        await _ensureChartJs();
+        var r = await fetch("/admin/staffing/stats");
+        if (!r.ok) { alert("Failed to load staffing stats: " + r.status); return; }
+        var d = await r.json();
+        renderStaffing(d);
+      } catch(e) {
+        alert("Staffing stats error: " + e.message);
+      } finally {
+        _staffingLoading = false;
+      }
+    }
+    function renderStaffing(d) {
+      var s = d.summary;
+      var cards = [
+        {label:"Total Employees", value:s.total_employees, color:"#1e293b"},
+        {label:"Active", value:s.active, color:"#22c55e"},
+        {label:"Dismissed", value:s.dismissed, color:"#64748b"},
+        {label:"Hired (90d)", value:s.hired_90d, color:"#3b82f6"},
+        {label:"Dismissed (90d)", value:s.dismissed_90d, color:"#ef4444"},
+        {label:"Avg Tenure", value:s.avg_tenure_years+"y", color:"#1e293b"},
+        {label:"Positions Total", value:s.total_positions, color:"#1e293b"},
+        {label:"Active Positions", value:s.active_positions, color:"#22c55e"},
+      ];
+      document.getElementById("staffingCards").innerHTML = cards.map(function(c) {
+        return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px">' +
+          '<div style="font-size:11px;color:#64748b;margin-bottom:2px">'+c.label+'</div>' +
+          '<div style="font-size:22px;font-weight:700;color:'+c.color+'">'+c.value+'</div>' +
+          '</div>';
+      }).join("");
+
+      var fi = d.file_info || {};
+      var info = "";
+      if (fi.employees_mtime) info = "Last sync: " + fi.employees_mtime;
+      document.getElementById("staffingFileInfo").textContent = info;
+
+      ["monthly","billing"].forEach(function(k) {
+        if (_staffingCharts[k]) { _staffingCharts[k].destroy(); _staffingCharts[k] = null; }
+      });
+
+      _staffingCharts.monthly = new Chart(document.getElementById("staffingMonthlyChart"), {
+        type: "bar",
+        data: {
+          labels: d.monthly.map(function(x){return x.month;}),
+          datasets: [
+            {label:"Hires", data:d.monthly.map(function(x){return x.hires;}), backgroundColor:"#22c55e", borderRadius:3},
+            {label:"Dismissals", data:d.monthly.map(function(x){return -x.dismissals;}), backgroundColor:"#ef4444", borderRadius:3},
+          ]
+        },
+        options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{position:"top",labels:{font:{size:11}}},tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+": "+Math.abs(ctx.parsed.y);}}}}, scales:{x:{ticks:{font:{size:10}}}, y:{ticks:{font:{size:10},callback:function(v){return Math.abs(v);}}}}}
+      });
+
+      _staffingCharts.billing = new Chart(document.getElementById("staffingBillingChart"), {
+        type: "doughnut",
+        data: {
+          labels: d.billing_types.map(function(x){return x.name;}),
+          datasets: [{
+            data: d.billing_types.map(function(x){return x.count;}),
+            backgroundColor: ["#22c55e","#f59e0b","#8b5cf6","#06b6d4","#ef4444","#64748b","#d1d5db"]
+          }]
+        },
+        options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{position:"bottom",labels:{font:{size:10},boxWidth:10}}}}
+      });
+
+      function fillTable(tbodyId, items, color) {
+        var max = items.length ? items[0].count : 1;
+        document.querySelector("#"+tbodyId+" tbody").innerHTML = items.map(function(it) {
+          return '<tr><td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(it.name)+'</td>' +
+            '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+it.count+'</td>' +
+            '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageBar(it.count, max, color)+'</td></tr>';
+        }).join("");
+      }
+      fillTable("staffingPoolsTable", d.resource_pools, "#22c55e");
+      fillTable("staffingTitlesTable", d.job_titles, "#3b82f6");
+      fillTable("staffingAccountsTable", d.top_accounts, "#8b5cf6");
+      fillTable("staffingStatusTable", d.active_status, "#f59e0b");
+    }
+    var staffingRefreshBtn = document.getElementById("staffingRefreshBtn");
+    if (staffingRefreshBtn) staffingRefreshBtn.addEventListener("click", loadStaffingStats);
 
     var keysSaveBtn = document.getElementById("keysSaveBtn");
     if (keysSaveBtn) {

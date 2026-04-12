@@ -308,61 +308,6 @@ def _read_usage_events() -> list[dict]:
     return events
 
 
-_GEMINI_BASE = "https://generativelanguage.googleapis.com"
-_PROXY_HOP_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
-
-
-async def _proxy_to_gemini(request: Request, path: str) -> RawResponse:
-    target_url = f"{_GEMINI_BASE}/{path}"
-    body = await request.body()
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in _PROXY_HOP_HEADERS}
-    params = dict(request.query_params)
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                headers=headers,
-                params=params,
-                content=body,
-            )
-        resp_headers = {k: v for k, v in resp.headers.items()
-                        if k.lower() not in {"transfer-encoding", "content-encoding"}}
-        return RawResponse(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=resp_headers,
-            media_type=resp.headers.get("content-type"),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Proxy error: {e}")
-
-
-@app.api_route("/v1beta/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def gemini_proxy_v1beta(request: Request, path: str):
-    """Proxy for Gemini API v1beta calls (generate content, file get/delete)."""
-    return await _proxy_to_gemini(request, f"v1beta/{path}")
-
-
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def gemini_proxy_v1(request: Request, path: str):
-    """Proxy for Gemini API v1 (stable) calls."""
-    return await _proxy_to_gemini(request, f"v1/{path}")
-
-
-@app.api_route("/v1alpha/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def gemini_proxy_v1alpha(request: Request, path: str):
-    """Proxy for Gemini API v1alpha (experimental) calls."""
-    return await _proxy_to_gemini(request, f"v1alpha/{path}")
-
-
-@app.api_route("/upload/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def gemini_proxy_upload(request: Request, path: str):
-    """Proxy for Gemini Files API uploads."""
-    return await _proxy_to_gemini(request, f"upload/{path}")
-
-
 @app.get("/admin/usage/data")
 def admin_usage_data(request: Request):
     """Return usage stats as JSON for the dashboard."""
@@ -1363,6 +1308,111 @@ async def staffing_put_config(request: Request):
         cfg["staffing_api_token"] = token
     _core.save_config(cfg)
     return {"ok": True}
+
+
+@app.get("/admin/staffing/stats")
+def admin_staffing_stats(request: Request):
+    """Aggregate stats from local _employees.json and _positions.json.
+
+    No live API calls — reads files that staffing_sync wrote.
+    """
+    _auth.require_role(_auth.ADMIN)(request)
+    emps = _employees_cache or _load_employees()
+    pos = _positions_cache or _load_positions()
+
+    today = time.strftime("%Y-%m-%d")
+    cutoff_90 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 90 * 86400))
+    cutoff_24mo = time.strftime("%Y-%m", time.localtime(time.time() - 730 * 86400))
+
+    # ── Employee aggregates ──
+    active = [e for e in emps if e.get("employment_status") == "Active"]
+    dismissed = [e for e in emps if e.get("employment_status") == "Dismissed"]
+    hired_90 = [e for e in emps if e.get("join_date", "") >= cutoff_90]
+    dismissed_90 = [e for e in emps if e.get("dismiss_date", "") >= cutoff_90 and e.get("dismiss_date")]
+
+    # Avg tenure of active (years)
+    tenure_days = []
+    now_ts = time.time()
+    for e in active:
+        jd = e.get("join_date", "")
+        if len(jd) == 10:
+            try:
+                t = time.mktime(time.strptime(jd, "%Y-%m-%d"))
+                tenure_days.append((now_ts - t) / 86400)
+            except Exception:
+                pass
+    avg_tenure_years = round(sum(tenure_days) / len(tenure_days) / 365.25, 1) if tenure_days else 0
+
+    # Hires/dismissals by month (last 24 months)
+    month_data: dict[str, dict] = {}
+    for e in emps:
+        jd = e.get("join_date", "")[:7]
+        if jd >= cutoff_24mo:
+            month_data.setdefault(jd, {"hires": 0, "dismissals": 0})
+            month_data[jd]["hires"] += 1
+        dd = e.get("dismiss_date", "")[:7]
+        if dd and dd >= cutoff_24mo:
+            month_data.setdefault(dd, {"hires": 0, "dismissals": 0})
+            month_data[dd]["dismissals"] += 1
+    monthly = sorted(
+        [{"month": m, **c} for m, c in month_data.items()],
+        key=lambda x: x["month"],
+    )
+
+    # Resource pools (active only)
+    pool_counter = Counter(e.get("resource_pool", "") for e in active if e.get("resource_pool"))
+    top_pools = [{"name": n, "count": c} for n, c in pool_counter.most_common(20)]
+
+    # Job titles (active only)
+    title_counter = Counter(e.get("job_title", "") for e in active if e.get("job_title"))
+    top_titles = [{"name": n, "count": c} for n, c in title_counter.most_common(20)]
+
+    # ── Position aggregates ──
+    active_pos = [p for p in pos if not p.get("is_closed")]
+    closed_pos = [p for p in pos if p.get("is_closed")]
+
+    # Billing type distribution (all positions)
+    billing_counter = Counter(p.get("role", "") for p in pos if p.get("role"))
+    billing = [{"name": n, "count": c} for n, c in billing_counter.most_common()]
+
+    # Active positions by status
+    pos_status = Counter(p.get("status", "") for p in active_pos)
+    active_status = [{"name": n, "count": c} for n, c in pos_status.most_common()]
+
+    # Top accounts/projects by active position count
+    acc_counter = Counter(p.get("account_name", "") for p in active_pos if p.get("account_name"))
+    top_accounts = [{"name": n, "count": c} for n, c in acc_counter.most_common(20)]
+
+    # Mtime of local files (so UI can show "last synced")
+    def _mtime(p):
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
+        except Exception:
+            return ""
+
+    return {
+        "summary": {
+            "total_employees": len(emps),
+            "active": len(active),
+            "dismissed": len(dismissed),
+            "hired_90d": len(hired_90),
+            "dismissed_90d": len(dismissed_90),
+            "avg_tenure_years": avg_tenure_years,
+            "total_positions": len(pos),
+            "active_positions": len(active_pos),
+            "closed_positions": len(closed_pos),
+        },
+        "monthly": monthly,
+        "resource_pools": top_pools,
+        "job_titles": top_titles,
+        "billing_types": billing,
+        "active_status": active_status,
+        "top_accounts": top_accounts,
+        "file_info": {
+            "employees_mtime": _mtime(EMPLOYEES_PATH),
+            "positions_mtime": _mtime(POSITIONS_PATH),
+        },
+    }
 
 
 @app.post("/admin/sync_staffing")
