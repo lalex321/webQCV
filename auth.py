@@ -25,7 +25,7 @@ ALL_ROLES = (ADMIN, USER, BASIC)
 
 # ── Pane visibility per role ──
 ROLE_PANES = {
-    ADMIN: ["paneConvert", "paneBatch", "paneJD", "paneXray", "paneGithub", "paneLogs", "panePrompt"],
+    ADMIN: ["paneConvert", "paneBatch", "paneJD", "paneXray", "paneGithub", "paneLogs", "paneAdmin"],
     USER:  ["paneConvert", "paneBatch", "paneJD", "paneXray", "paneGithub", "paneLogs"],
     BASIC: ["paneConvert"],
 }

@@ -100,6 +100,9 @@
     .page-tab-bar{display:flex;gap:2px;padding:0 8px;background:none}
     .page-tab-btn{padding:4px 14px;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:none;font-weight:600;font-size:11px;color:#64748b;transition:all .15s;position:relative;top:1px;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .page-tab-btn.active{color:var(--primary);background:rgba(255,255,255,.85);border-color:#a8b5c4}
+    .admin-subtab-btn{padding:4px 14px;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:none;font-weight:600;font-size:11px;color:#64748b;transition:all .15s;position:relative;top:1px;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .admin-subtab-btn.active{color:var(--primary);background:rgba(255,255,255,.85);border-color:#a8b5c4}
+    .admin-subtab-btn:hover:not(.active){color:#334155;background:rgba(255,255,255,.4)}
     .page-tab-btn:hover:not(.active){color:#334155;background:rgba(255,255,255,.4)}
     .page-tab-content{flex:1;min-width:0;border-top:1px solid #a8b5c4}
     .page-pane{height:var(--pane-height,80vh);overflow:auto}
@@ -287,6 +290,27 @@
       border:1px solid #08142d;
       box-shadow:0 12px 28px rgba(8,20,45,.24);
     }
+    /* Compact button style for Admin pane */
+    .admin-btn{
+      padding:6px 14px;
+      font-size:12px;
+      font-weight:600;
+      border-radius:6px;
+      border:1px solid var(--primary);
+      background:var(--primary);
+      color:#fff;
+      cursor:pointer;
+      min-width:0;
+      text-decoration:none;
+      display:inline-block;
+      text-align:center;
+      box-shadow:none;
+      line-height:1.4;
+    }
+    .admin-btn:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+    .admin-btn:disabled{background:#94a3b8;border-color:#94a3b8;cursor:not-allowed}
+    .admin-btn.ghost{background:#fff;color:var(--primary)}
+    .admin-btn.ghost:hover{background:#f1f5f9}
     .status-box{
       margin-top:14px;
       padding:8px 14px;
@@ -555,7 +579,7 @@
         <button class="page-tab-btn" data-pane="paneXray">X Ray</button>
         <button class="page-tab-btn" data-pane="paneGithub">GitHub</button>
         <button class="page-tab-btn" data-pane="paneLogs">Logs</button>
-        <button class="page-tab-btn" data-pane="panePrompt">Prompt</button>
+        <button class="page-tab-btn" data-pane="paneAdmin">Admin</button>
       </div>
       <div class="page-tab-content">
       <div class="page-pane convert-pane" id="paneConvert">
@@ -675,8 +699,81 @@
     </div><!-- /scroll-area -->
     </div><!-- /paneConvert -->
 
-    <div class="page-pane hidden" id="panePrompt" style="display:flex;flex-direction:column">
-      <div style="padding:18px 24px;display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="page-pane hidden" id="paneAdmin" style="display:flex;flex-direction:column">
+      <div class="admin-subtabs" style="display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid #a8b5c4;flex-shrink:0">
+        <button class="admin-subtab-btn active" data-subpane="adminGeneral" type="button">General</button>
+        <button class="admin-subtab-btn" data-subpane="adminUsers" type="button">Users</button>
+        <button class="admin-subtab-btn" data-subpane="adminPrompts" type="button">Prompts</button>
+        <button class="admin-subtab-btn" data-subpane="adminUsage" type="button">Usage</button>
+      </div>
+
+      <div class="admin-subpane" id="adminGeneral" style="padding:20px 24px;overflow-y:auto;flex:1;min-height:0">
+        <section style="margin-bottom:28px">
+          <h3 style="margin:0 0 8px 0;font-size:14px">Data Sync</h3>
+          <p style="margin:0 0 10px 0;font-size:12px;color:#64748b">Pull fresh employees and positions from the Quantori Staffing API. Overwrites <code>_employees.json</code> and <code>_positions.json</code>.</p>
+          <button id="syncStaffingBtn" class="admin-btn" type="button">Sync from Staffing API</button>
+          <div id="syncStaffingStatus" style="margin-top:8px;font-size:12px;color:#64748b"></div>
+        </section>
+
+        <section style="margin-bottom:28px">
+          <h3 style="margin:0 0 8px 0;font-size:14px">Backup &amp; Restore</h3>
+          <p style="margin:0 0 10px 0;font-size:12px;color:#64748b">Archive contains <code>_store/</code>, <code>_jd_store/</code>, <code>_employees.json</code>, <code>_positions.json</code>, <code>_users.json</code>.</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <a id="downloadBackupBtn" href="/admin/download_data" class="admin-btn">Download backup (.zip)</a>
+            <input type="file" id="uploadBackupInput" accept=".zip" style="display:none">
+            <button id="uploadBackupBtn" class="admin-btn ghost" type="button">Upload backup…</button>
+            <span id="uploadBackupStatus" style="font-size:12px;color:#64748b"></span>
+          </div>
+        </section>
+
+        <section>
+          <h3 style="margin:0 0 8px 0;font-size:14px">API Keys &amp; Tokens</h3>
+          <p style="margin:0 0 10px 0;font-size:12px;color:#64748b">Current values are hidden. Leave a field empty to keep its current value. Changes take effect immediately.</p>
+          <div style="display:grid;grid-template-columns:170px 1fr;gap:10px 12px;align-items:center;max-width:720px">
+            <label style="font-size:12px;font-weight:600">Staffing API URL</label>
+            <input type="text" id="keyStaffingUrl" placeholder="https://qa-staffing-api.qtidev.com" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px">
+
+            <label style="font-size:12px;font-weight:600">Staffing API token</label>
+            <input type="password" id="keyStaffingToken" placeholder="(not set)" autocomplete="off" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px">
+
+            <label style="font-size:12px;font-weight:600">Gemini API key</label>
+            <input type="password" id="keyGemini" placeholder="(not set)" autocomplete="off" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px">
+
+            <label style="font-size:12px;font-weight:600">GitHub PAT</label>
+            <input type="password" id="keyGithub" placeholder="(not set)" autocomplete="off" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px">
+          </div>
+          <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+            <button id="keysSaveBtn" class="admin-btn" type="button">Save changes</button>
+            <span id="keysStatus" style="font-size:12px;color:#64748b"></span>
+          </div>
+        </section>
+      </div>
+
+      <div class="admin-subpane hidden" id="adminUsers" style="padding:20px 24px;overflow-y:auto;flex:1;min-height:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <h3 style="margin:0;font-size:14px">User Management</h3>
+          <span style="font-size:12px;color:#64748b">Manage login accounts and roles.</span>
+          <button id="usersAddBtn" class="admin-btn" type="button" style="margin-left:auto">+ Add User</button>
+        </div>
+        <table id="usersTable" style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
+          <thead>
+            <tr style="background:#f1f5f9">
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Email</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Name</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Role</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Active</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Created</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">Password</th>
+              <th style="padding:6px 10px;text-align:left;font-weight:600;color:#64748b;text-transform:uppercase;font-size:11px;border-bottom:1px solid #e2e8f0">New Password</th>
+              <th style="padding:6px 10px;border-bottom:1px solid #e2e8f0"></th>
+            </tr>
+          </thead>
+          <tbody id="usersTbody"></tbody>
+        </table>
+        <div id="usersMsg" style="font-size:12px;margin-top:8px"></div>
+      </div>
+
+      <div class="admin-subpane hidden" id="adminPrompts" style="padding:18px 24px;display:flex;flex-direction:column;flex:1;min-height:0">
         <label style="font-weight:700;font-size:13px;display:block;margin-bottom:6px;flex-shrink:0">Prompt</label>
         <select id="promptSelect" class="prompt-select" style="flex-shrink:0">
           <option value="prompt_tailor">Tailor</option>
@@ -692,13 +789,53 @@
         </div>
         <div id="promptStatus" class="prompt-status" style="flex-shrink:0"></div>
       </div>
+
+      <div class="admin-subpane hidden" id="adminUsage" style="padding:20px 24px;overflow-y:auto;flex:1;min-height:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <h3 style="margin:0;font-size:14px">Usage Statistics</h3>
+          <span style="font-size:12px;color:#64748b">Charts and counts of conversions, logins, sync events.</span>
+          <button id="usageRefreshBtn" class="admin-btn ghost" type="button" style="margin-left:auto">Refresh</button>
+        </div>
+        <div id="usageCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:16px"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="usage-box" style="grid-column:1/-1;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Daily Activity (last 30 days)</div>
+            <canvas id="usageDailyChart" style="max-height:220px"></canvas>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">By Hour of Day</div>
+            <canvas id="usageHourChart" style="max-height:220px"></canvas>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Options Usage</div>
+            <canvas id="usageOptionsChart" style="max-height:220px"></canvas>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:340px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Top Users</div>
+            <table id="usageUsersTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">User</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Jobs</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:340px;overflow:auto">
+            <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Templates</div>
+            <table id="usageTemplatesTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Template</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Count</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Bar</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+        <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:340px;overflow:auto;margin-bottom:16px">
+          <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Recent Errors</div>
+          <table id="usageErrorsTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Time</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">User</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">File</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Error</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div class="usage-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;max-height:400px;overflow:auto">
+          <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:8px">Recent Events</div>
+          <table id="usageRecentTable" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Time</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Event</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">User</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">File</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Template</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Tailor</th><th style="text-align:left;padding:4px 6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600">Dur</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
     </div>
 
     <div class="page-pane hidden" id="paneBatch">
       <div style="padding:12px 24px 0">
         <div class="batch-toolbar">
           <button id="batchImport" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">Import CVs</button>
-          <button id="syncStaffingBtn" class="batch-btn hidden" title="Sync employees and positions from Staffing API">Sync Staffing</button>
           <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
           <select id="batchJDSelect" class="prompt-select" style="max-width:200px"><option value="">— No JD —</option></select>
@@ -861,10 +998,6 @@
         });
         var userEl = document.getElementById("statUser");
         if (userEl && _authUser.name) userEl.textContent = _authUser.name + " |";
-        if (_authUser.role === "admin") {
-          var syncBtn = document.getElementById("syncStaffingBtn");
-          if (syncBtn) syncBtn.classList.remove("hidden");
-        }
         // Wrap localStorage with user-scoped prefix
         var _prefix = "qcv_" + (_authUser.email || "anon") + "_";
         var _realLS = window.localStorage;
@@ -2433,9 +2566,23 @@
         btn.classList.add("active");
         document.getElementById(btn.dataset.pane).classList.remove("hidden");
         localStorage.setItem("activeTab", btn.dataset.pane);
-        if (btn.dataset.pane === "panePrompt" && !promptDataLoaded) loadPrompts();
         if (btn.dataset.pane === "paneBatch" && !batchPollInterval) loadBatchStore();
         if (btn.dataset.pane === "paneJD" && !jdDataLoaded) loadJDStore();
+        if (btn.dataset.pane === "paneAdmin") loadKeys();
+      });
+    });
+
+    /* ── Admin sub-tab switching ── */
+    document.querySelectorAll(".admin-subtab-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        document.querySelectorAll(".admin-subtab-btn").forEach(function(b) { b.classList.remove("active"); });
+        document.querySelectorAll(".admin-subpane").forEach(function(p) { p.classList.add("hidden"); });
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.subpane).classList.remove("hidden");
+        if (btn.dataset.subpane === "adminPrompts" && !promptDataLoaded) loadPrompts();
+        if (btn.dataset.subpane === "adminGeneral") loadKeys();
+        if (btn.dataset.subpane === "adminUsers") loadUsers();
+        if (btn.dataset.subpane === "adminUsage") loadUsage();
       });
     });
 
@@ -3457,7 +3604,292 @@
           alert("Error: " + e.message);
         } finally {
           syncStaffingBtn.disabled = false;
-          syncStaffingBtn.textContent = "Sync Staffing";
+          syncStaffingBtn.textContent = "Sync from Staffing API";
+        }
+      });
+    }
+
+    /* ── Admin: Backup & Restore ── */
+    var uploadBackupBtn = document.getElementById("uploadBackupBtn");
+    var uploadBackupInput = document.getElementById("uploadBackupInput");
+    var uploadBackupStatus = document.getElementById("uploadBackupStatus");
+    if (uploadBackupBtn) {
+      uploadBackupBtn.addEventListener("click", function() { uploadBackupInput.click(); });
+      uploadBackupInput.addEventListener("change", async function() {
+        var f = uploadBackupInput.files && uploadBackupInput.files[0];
+        uploadBackupInput.value = "";
+        if (!f) return;
+        if (!confirm("Restore backup from " + f.name + "?\nThis will overwrite existing data in _store/, _jd_store/, _employees.json, _positions.json, _users.json.")) return;
+        uploadBackupStatus.textContent = "Uploading…";
+        var fd = new FormData();
+        fd.append("file", f);
+        try {
+          var r = await fetch("/admin/upload_data", { method: "POST", body: fd });
+          if (!r.ok) { uploadBackupStatus.textContent = "Error: " + (await r.text()); return; }
+          var d = await r.json();
+          uploadBackupStatus.textContent = "Restored " + d.extracted + " files.";
+          appLog("Backup restored: " + d.extracted + " files from " + f.name);
+        } catch (e) {
+          uploadBackupStatus.textContent = "Error: " + e.message;
+        }
+      });
+    }
+
+    /* ── Admin: API Keys & Tokens ── */
+    var keysStatus = document.getElementById("keysStatus");
+    async function loadKeys() {
+      try {
+        var r = await fetch("/admin/keys");
+        if (!r.ok) return;
+        var d = await r.json();
+        document.getElementById("keyStaffingUrl").value = d.staffing_url || "";
+        document.getElementById("keyStaffingToken").placeholder = d.staffing_token.set ? d.staffing_token.masked : "(not set)";
+        document.getElementById("keyGemini").placeholder = d.gemini.set ? d.gemini.masked : "(not set)";
+        document.getElementById("keyGithub").placeholder = d.github.set ? d.github.masked : "(not set)";
+      } catch(e) {}
+    }
+    /* ── Users Management (Admin → Users) ── */
+    var _usersData = [];
+    async function loadUsers() {
+      try {
+        var r = await fetch("/api/auth/users");
+        if (!r.ok) { usersMsgShow("Error " + r.status, "err"); return; }
+        var d = await r.json();
+        _usersData = d.users || [];
+        renderUsers();
+      } catch(e) { usersMsgShow("Network error: " + e, "err"); }
+    }
+    function renderUsers() {
+      var tb = document.getElementById("usersTbody");
+      tb.innerHTML = "";
+      var esc = function(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; };
+      _usersData.forEach(function(u) {
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9">' + esc(u.email) + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="text" value="' + esc(u.name || "") + '" data-field="name" style="width:120px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px"></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><select data-field="role" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px">' +
+            '<option value="admin"' + (u.role==="admin"?" selected":"") + '>admin</option>' +
+            '<option value="user"' + (u.role==="user"?" selected":"") + '>user</option>' +
+            '<option value="basic"' + (u.role==="basic"?" selected":"") + '>basic</option>' +
+          '</select></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="checkbox" data-field="active"' + (u.active ? " checked" : "") + '></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;color:#64748b">' + (u.created || "").substring(0,10) + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;color:#64748b;font-family:monospace">' + esc(u.password_plain || "") + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9"><input type="text" placeholder="new password" data-field="password" style="width:110px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px"></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap"><button class="admin-btn" data-save="' + esc(u.email) + '" type="button">Save</button> ' +
+              '<button class="admin-btn ghost" data-del="' + esc(u.email) + '" type="button" style="color:#dc2626;border-color:#dc2626">Del</button></td>';
+        tb.appendChild(tr);
+      });
+      tb.querySelectorAll("[data-save]").forEach(function(btn) {
+        btn.addEventListener("click", function() { saveUser(btn.dataset.save, btn.closest("tr")); });
+      });
+      tb.querySelectorAll("[data-del]").forEach(function(btn) {
+        btn.addEventListener("click", function() { delUser(btn.dataset.del); });
+      });
+    }
+    function usersMsgShow(t, cls) {
+      var m = document.getElementById("usersMsg");
+      m.textContent = t;
+      m.style.color = cls === "ok" ? "#16a34a" : (cls === "err" ? "#dc2626" : "#64748b");
+      setTimeout(function(){ m.textContent = ""; }, 3000);
+    }
+    async function saveUser(email, tr) {
+      try {
+        var body = { email: email };
+        body.name = tr.querySelector('[data-field="name"]').value.trim();
+        body.role = tr.querySelector('[data-field="role"]').value;
+        body.active = tr.querySelector('[data-field="active"]').checked;
+        var pw = tr.querySelector('[data-field="password"]').value;
+        if (pw) body.password = pw;
+        var r = await fetch("/api/auth/users/" + encodeURIComponent(email), {
+          method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+        });
+        if (r.ok) { usersMsgShow("Saved: " + email + " role=" + body.role, "ok"); loadUsers(); }
+        else { var d = await r.json(); usersMsgShow("Error " + r.status + ": " + (d.detail || JSON.stringify(d)), "err"); }
+      } catch(e) { usersMsgShow("Network error: " + e, "err"); }
+    }
+    async function delUser(email) {
+      if (!confirm("Delete " + email + "?")) return;
+      var r = await fetch("/api/auth/users/" + encodeURIComponent(email), { method: "DELETE" });
+      if (r.ok) { usersMsgShow("Deleted", "ok"); loadUsers(); } else { usersMsgShow("Error", "err"); }
+    }
+    var usersAddBtn = document.getElementById("usersAddBtn");
+    if (usersAddBtn) {
+      usersAddBtn.addEventListener("click", function() {
+        var email = prompt("Email:");
+        if (!email) return;
+        var pw = prompt("Password:");
+        if (!pw) return;
+        fetch("/api/auth/users/" + encodeURIComponent(email), {
+          method: "PUT", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ email: email, role: "basic", active: true, password: pw })
+        }).then(function(r) {
+          if (r.ok) { usersMsgShow("Added", "ok"); loadUsers(); }
+          else { r.json().then(function(d) { usersMsgShow("Error: " + d.detail, "err"); }); }
+        });
+      });
+    }
+
+    /* ── Usage Statistics (Admin → Usage) ── */
+    var _chartJsLoading = null;
+    function _ensureChartJs() {
+      if (window.Chart) return Promise.resolve();
+      if (_chartJsLoading) return _chartJsLoading;
+      _chartJsLoading = new Promise(function(resolve, reject) {
+        var s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js";
+        s.onload = function() { resolve(); };
+        s.onerror = function() { reject(new Error("Failed to load Chart.js")); };
+        document.head.appendChild(s);
+      });
+      return _chartJsLoading;
+    }
+    var _usageCharts = { daily:null, hour:null, options:null };
+    var _usageLoading = false;
+    async function loadUsage() {
+      if (_usageLoading) return;
+      _usageLoading = true;
+      try {
+        await _ensureChartJs();
+        var r = await fetch("/admin/usage/data");
+        if (!r.ok) { alert("Failed to load usage: " + r.status); return; }
+        var d = await r.json();
+        renderUsage(d);
+      } catch(e) {
+        alert("Usage error: " + e.message);
+      } finally {
+        _usageLoading = false;
+      }
+    }
+    function _usageEsc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+    function _usageShortUser(u) { return (u||"").replace(/@.*/, ""); }
+    function _usageShortTS(ts) { return (ts||"").replace("T"," ").slice(0,16); }
+    function _usageBar(val, max, color) {
+      var pct = max ? Math.round(val/max*100) : 0;
+      return '<div style="background:#f3f4f6;border-radius:3px;height:12px;width:100px;display:inline-block">' +
+        '<div style="background:'+(color||"#3b82f6")+';height:100%;border-radius:3px;width:'+pct+'%"></div></div>';
+    }
+    function _usageBadge(ev) {
+      var bg = "#f3f4f6", fg = "#374151";
+      if (ev === "done") { bg = "#dcfce7"; fg = "#166534"; }
+      else if (ev === "failed") { bg = "#fee2e2"; fg = "#991b1b"; }
+      else if (ev === "started") { bg = "#dbeafe"; fg = "#1e40af"; }
+      return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;background:'+bg+';color:'+fg+'">'+_usageEsc(ev)+'</span>';
+    }
+    function renderUsage(d) {
+      var s = d.summary;
+      var cards = [
+        {label:"Total Jobs", value:s.total, color:"#1e293b"},
+        {label:"Today", value:s.today, color:"#3b82f6"},
+        {label:"This Week", value:s.week, color:"#3b82f6"},
+        {label:"Done", value:s.done, color:"#22c55e", sub:"success rate: "+s.success_rate+"%"},
+        {label:"Failed", value:s.failed, color:"#ef4444"},
+        {label:"Users", value:s.unique_users, color:"#1e293b"},
+        {label:"Avg Duration", value:s.avg_duration+"s", color:"#1e293b"},
+      ];
+      document.getElementById("usageCards").innerHTML = cards.map(function(c) {
+        return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px">' +
+          '<div style="font-size:11px;color:#64748b;margin-bottom:2px">'+c.label+'</div>' +
+          '<div style="font-size:22px;font-weight:700;color:'+c.color+'">'+c.value+'</div>' +
+          (c.sub ? '<div style="font-size:10px;color:#94a3b8;margin-top:2px">'+c.sub+'</div>' : '') +
+          '</div>';
+      }).join("");
+
+      // Destroy previous charts
+      ["daily","hour","options"].forEach(function(k) {
+        if (_usageCharts[k]) { _usageCharts[k].destroy(); _usageCharts[k] = null; }
+      });
+
+      _usageCharts.daily = new Chart(document.getElementById("usageDailyChart"), {
+        type: "bar",
+        data: {
+          labels: d.daily.map(function(x){return x.date.slice(5);}),
+          datasets: [
+            {label:"Done", data:d.daily.map(function(x){return x.done;}), backgroundColor:"#22c55e", borderRadius:3},
+            {label:"Failed", data:d.daily.map(function(x){return x.failed;}), backgroundColor:"#ef4444", borderRadius:3},
+          ]
+        },
+        options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{position:"top",labels:{font:{size:11}}}}, scales:{x:{stacked:true,ticks:{font:{size:10}}}, y:{stacked:true,beginAtZero:true,ticks:{font:{size:10}}}}}
+      });
+      _usageCharts.hour = new Chart(document.getElementById("usageHourChart"), {
+        type: "bar",
+        data: {
+          labels: d.hours.map(function(_,i){return i+"h";}),
+          datasets: [{label:"Jobs", data:d.hours, backgroundColor:"#60a5fa", borderRadius:2}]
+        },
+        options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:{ticks:{font:{size:10}}}, y:{beginAtZero:true,ticks:{font:{size:10}}}}}
+      });
+      var opt = d.options;
+      _usageCharts.options = new Chart(document.getElementById("usageOptionsChart"), {
+        type: "doughnut",
+        data: {
+          labels: ["Tailor", "Anonymize", "Autofix", "Plain"],
+          datasets: [{
+            data: [opt.tailor, opt.anonymize, opt.autofix, Math.max(0, opt.total - opt.tailor - opt.anonymize - opt.autofix)],
+            backgroundColor: ["#8b5cf6", "#f59e0b", "#06b6d4", "#d1d5db"]
+          }]
+        },
+        options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{position:"bottom",labels:{font:{size:11}}}}}
+      });
+
+      var maxU = d.top_users.length ? d.top_users[0].count : 1;
+      document.querySelector("#usageUsersTable tbody").innerHTML = d.top_users.map(function(u) {
+        return '<tr><td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(_usageShortUser(u.user))+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+u.count+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageBar(u.count, maxU)+'</td></tr>';
+      }).join("");
+
+      var maxT = d.templates.length ? d.templates[0].count : 1;
+      document.querySelector("#usageTemplatesTable tbody").innerHTML = d.templates.map(function(t) {
+        return '<tr><td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(t.name)+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+t.count+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageBar(t.count, maxT, "#8b5cf6")+'</td></tr>';
+      }).join("");
+
+      document.querySelector("#usageErrorsTable tbody").innerHTML = d.recent_errors.length
+        ? d.recent_errors.map(function(e) {
+            return '<tr><td style="padding:4px 6px;border-bottom:1px solid #f1f5f9;white-space:nowrap">'+_usageShortTS(e.ts)+'</td>' +
+              '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(_usageShortUser(e.user))+'</td>' +
+              '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(e.file)+'</td>' +
+              '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9;color:#b91c1c;white-space:normal;max-width:300px">'+_usageEsc(e.error)+'</td></tr>';
+          }).join("")
+        : '<tr><td colspan="4" style="padding:8px;color:#94a3b8">No errors</td></tr>';
+
+      document.querySelector("#usageRecentTable tbody").innerHTML = d.recent.map(function(e) {
+        return '<tr><td style="padding:4px 6px;border-bottom:1px solid #f1f5f9;white-space:nowrap">'+_usageShortTS(e.ts)+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageBadge(e.event)+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(_usageShortUser(e.user))+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc(e.file)+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+_usageEsc((e.template||"").replace(".docx",""))+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+(e.tailor?"Yes":"")+'</td>' +
+          '<td style="padding:4px 6px;border-bottom:1px solid #f1f5f9">'+(e.duration||"")+'</td></tr>';
+      }).join("");
+    }
+    var usageRefreshBtn = document.getElementById("usageRefreshBtn");
+    if (usageRefreshBtn) usageRefreshBtn.addEventListener("click", loadUsage);
+
+    var keysSaveBtn = document.getElementById("keysSaveBtn");
+    if (keysSaveBtn) {
+      keysSaveBtn.addEventListener("click", async function() {
+        keysStatus.textContent = "Saving…";
+        var body = {
+          staffing_url: document.getElementById("keyStaffingUrl").value.trim(),
+          staffing_token: document.getElementById("keyStaffingToken").value.trim(),
+          gemini: document.getElementById("keyGemini").value.trim(),
+          github: document.getElementById("keyGithub").value.trim(),
+        };
+        try {
+          var r = await fetch("/admin/keys", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+          if (!r.ok) { keysStatus.textContent = "Error: " + (await r.text()); return; }
+          keysStatus.textContent = "Saved.";
+          document.getElementById("keyStaffingToken").value = "";
+          document.getElementById("keyGemini").value = "";
+          document.getElementById("keyGithub").value = "";
+          loadKeys();
+          setTimeout(function(){ keysStatus.textContent = ""; }, 2500);
+        } catch(e) {
+          keysStatus.textContent = "Error: " + e.message;
         }
       });
     }

@@ -1303,6 +1303,46 @@ def _mask_token(t: str) -> str:
     return f"{t[:6]}…{t[-4:]}"
 
 
+@app.get("/admin/keys")
+def admin_get_keys(request: Request):
+    """Return masked status of all admin-managed keys/tokens."""
+    _auth.require_role(_auth.ADMIN)(request)
+    cfg = _core.load_config()
+    gemini = resolve_api_key(APP_DIR, cfg)
+    gh = _resolve_github_token(cfg)
+    url, staffing = _staffing_settings()
+    return {
+        "gemini": {"set": bool(gemini), "masked": _mask_token(gemini)},
+        "github": {"set": bool(gh), "masked": _mask_token(gh)},
+        "staffing_url": url,
+        "staffing_token": {"set": bool(staffing), "masked": _mask_token(staffing)},
+    }
+
+
+@app.put("/admin/keys")
+async def admin_put_keys(request: Request):
+    """Update one or more admin-managed keys. Empty strings are ignored (keep current)."""
+    _auth.require_role(_auth.ADMIN)(request)
+    body = await request.json()
+    gemini = (body.get("gemini") or "").strip()
+    github = (body.get("github") or "").strip()
+    staffing_url = body.get("staffing_url")
+    staffing_token = (body.get("staffing_token") or "").strip()
+
+    if gemini:
+        (APP_DIR / ".api_key").write_text(gemini, encoding="utf-8")
+    if github:
+        (APP_DIR / ".github_token").write_text(github, encoding="utf-8")
+    if staffing_url is not None or staffing_token:
+        cfg = _core.load_config()
+        if staffing_url is not None:
+            cfg["staffing_api_url"] = staffing_url.strip()
+        if staffing_token:
+            cfg["staffing_api_token"] = staffing_token
+        _core.save_config(cfg)
+    return {"ok": True}
+
+
 @app.get("/admin/staffing/config")
 def staffing_get_config(request: Request):
     _auth.require_role(_auth.ADMIN)(request)
