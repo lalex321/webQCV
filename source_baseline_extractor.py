@@ -5,8 +5,27 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+import zipfile
+
 from docx import Document
 from pypdf import PdfReader
+
+def _check_qcv_property(path: str | Path) -> bool:
+    """Check if DOCX has custom property qcv_generated=true."""
+    try:
+        with zipfile.ZipFile(str(path), "r") as z:
+            if "docProps/custom.xml" not in z.namelist():
+                return False
+            from lxml import etree
+            root = etree.fromstring(z.read("docProps/custom.xml"))
+            for prop in root:
+                if prop.get("name") == "qcv_generated":
+                    val = prop[0].text if len(prop) else ""
+                    return val and val.strip().lower() == "true"
+    except Exception:
+        pass
+    return False
+
 
 # Known section title variants used to map source headings to normalized QCV blocks.
 SECTION_ALIASES = {
@@ -126,6 +145,7 @@ def extract_from_docx(path: str | Path) -> dict[str, Any]:
         "blocks": blocks,
         "links": links,
         "sections": sections,
+        "qcv_generated": _check_qcv_property(path),
     }
 
 

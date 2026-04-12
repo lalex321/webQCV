@@ -1589,29 +1589,6 @@ def sanitize_json(data):
     # beyond what the original CV contained. Skills must mirror the source exactly.
     # Enrichment is only appropriate during tailoring (prompt_tailor handles it).
 
-    # Enrich experience environment from highlights: extract tech terms mentioned inline
-    # Only match well-defined tech terms (tools, frameworks, languages) using word boundaries
-    _known_tech_lower = {}  # lowercase -> original case
-    for items in data.get('skills', {}).values():
-        if isinstance(items, list):
-            for s in items:
-                if isinstance(s, str) and len(s.strip()) > 2:
-                    _known_tech_lower[s.lower().strip()] = s.strip()
-    for job in data.get('experience', []):
-        env = job.get('environment') or []
-        env_lower = {e.lower().strip() for e in env}
-        text_parts = list(job.get('highlights') or [])
-        if job.get('project_description'):
-            text_parts.append(job['project_description'])
-        combined_text = ' '.join(str(t) for t in text_parts)
-        for tech_lower, tech_orig in _known_tech_lower.items():
-            if tech_lower not in env_lower:
-                # Use word boundary matching to avoid partial matches
-                if re.search(r'\b' + re.escape(tech_lower) + r'\b', combined_text, re.IGNORECASE):
-                    env.append(tech_orig)
-                    env_lower.add(tech_lower)
-        job['environment'] = env
-
     if not isinstance(data.get('projects'), list): data['projects'] = []
     clean_projects = []
     for p in data['projects']:
@@ -2101,6 +2078,67 @@ def process_file_gemini(file_path, api_key, custom_instructions, task_state=None
     data = extract_first_json_object(text)
     return sanitize_json(data), in_tok, out_tok, cost
 
+def _stamp_qcv_property(docx_path):
+    """Write a custom document property 'qcv_generated=true' into a DOCX file."""
+    import zipfile, shutil, tempfile
+    from lxml import etree
+    NS_CP = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+    NS_VT = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
+    CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+    REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+    CP_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties"
+    try:
+        tmp = tempfile.mktemp(suffix=".docx")
+        with zipfile.ZipFile(str(docx_path), "r") as zin, zipfile.ZipFile(tmp, "w") as zout:
+            has_custom = "docProps/custom.xml" in zin.namelist()
+            for item in zin.infolist():
+                raw = zin.read(item.filename)
+                if item.filename == "docProps/custom.xml":
+                    # Parse existing custom props, add ours if missing
+                    root = etree.fromstring(raw)
+                    exists = any(p.get("name") == "qcv_generated" for p in root)
+                    if not exists:
+                        prop = etree.SubElement(root, f"{{{NS_CP}}}property",
+                                                fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}",
+                                                pid=str(len(root) + 2), name="qcv_generated")
+                        val = etree.SubElement(prop, f"{{{NS_VT}}}bool")
+                        val.text = "true"
+                    raw = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                elif item.filename == "[Content_Types].xml" and not has_custom:
+                    root = etree.fromstring(raw)
+                    # Add content type for custom.xml if missing
+                    found = any(n.get("PartName") == "/docProps/custom.xml" for n in root)
+                    if not found:
+                        etree.SubElement(root, f"{{{CONTENT_TYPES_NS}}}Override",
+                                         PartName="/docProps/custom.xml",
+                                         ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml")
+                    raw = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                elif item.filename == "_rels/.rels" and not has_custom:
+                    root = etree.fromstring(raw)
+                    found = any(n.get("Target") == "docProps/custom.xml" for n in root)
+                    if not found:
+                        max_id = max((int(r.get("Id", "rId0").replace("rId", "")) for r in root), default=0)
+                        etree.SubElement(root, f"{{{REL_NS}}}Relationship",
+                                         Id=f"rId{max_id + 1}", Type=CP_REL_TYPE,
+                                         Target="docProps/custom.xml")
+                    raw = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                zout.writestr(item, raw)
+            if not has_custom:
+                # Create new custom.xml
+                root = etree.Element(f"{{{NS_CP}}}Properties",
+                                     nsmap={"vt": NS_VT, None: NS_CP})
+                prop = etree.SubElement(root, f"{{{NS_CP}}}property",
+                                        fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}",
+                                        pid="2", name="qcv_generated")
+                val = etree.SubElement(prop, f"{{{NS_VT}}}bool")
+                val.text = "true"
+                zout.writestr("docProps/custom.xml",
+                              etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True))
+        shutil.move(tmp, str(docx_path))
+    except Exception:
+        pass  # Non-critical: don't break DOCX generation if stamping fails
+
+
 def generate_docx_from_json(data, output_path, cfg):
     template_name = cfg.get("active_template", "quantori_classic.docx")
 
@@ -2267,6 +2305,8 @@ def generate_docx_from_json(data, output_path, cfg):
     doc.render(context)
     try:
         doc.save(output_path)
+        # Stamp custom property so we can detect our own documents on re-import
+        _stamp_qcv_property(output_path)
         return output_path
     except PermissionError:
         base, ext = os.path.splitext(output_path)
