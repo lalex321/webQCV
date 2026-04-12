@@ -1286,6 +1286,66 @@ def list_positions(request: Request, q: str = "", employee: str = ""):
     return {"positions": data, "total": len(_positions_cache)}
 
 
+# ── Staffing API Sync ────────────────────────────────────────────────────────
+import staffing_sync  # noqa: E402
+
+
+def _staffing_settings() -> tuple[str, str]:
+    cfg = _core.load_config()
+    return cfg.get("staffing_api_url", "") or "", cfg.get("staffing_api_token", "") or ""
+
+
+def _mask_token(t: str) -> str:
+    if not t:
+        return ""
+    if len(t) <= 12:
+        return "***"
+    return f"{t[:6]}…{t[-4:]}"
+
+
+@app.get("/admin/staffing/config")
+def staffing_get_config(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
+    url, token = _staffing_settings()
+    return {"url": url, "token_masked": _mask_token(token), "has_token": bool(token)}
+
+
+@app.put("/admin/staffing/config")
+async def staffing_put_config(request: Request):
+    _auth.require_role(_auth.ADMIN)(request)
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    token = (body.get("token") or "").strip()
+    cfg = _core.load_config()
+    cfg["staffing_api_url"] = url
+    # Only overwrite token if the caller sent a non-empty one (so UI can PUT url without re-sending token)
+    if token:
+        cfg["staffing_api_token"] = token
+    _core.save_config(cfg)
+    return {"ok": True}
+
+
+@app.post("/admin/sync_staffing")
+def staffing_sync_now(request: Request):
+    user = _auth.require_role(_auth.ADMIN)(request)
+    url, token = _staffing_settings()
+    try:
+        summary = staffing_sync.sync_all(url, token, EMPLOYEES_PATH, POSITIONS_PATH)
+    except staffing_sync.StaffingSyncError as e:
+        append_usage({"event": "staffing_sync", "ok": False, "user": user.get("email", ""), "error": str(e)})
+        raise HTTPException(status_code=502, detail=str(e))
+    # Refresh in-memory caches so endpoints see fresh data without restart
+    _load_employees()
+    _load_positions()
+    append_usage({
+        "event": "staffing_sync",
+        "ok": True,
+        "user": user.get("email", ""),
+        **{k: v for k, v in summary.items() if k != "ok"},
+    })
+    return summary
+
+
 # ── JD Store ──────────────────────────────────────────────────────────────────
 
 _JD_LOCK = threading.Lock()

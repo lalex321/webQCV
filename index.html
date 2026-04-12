@@ -698,6 +698,7 @@
       <div style="padding:12px 24px 0">
         <div class="batch-toolbar">
           <button id="batchImport" class="batch-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)">Import CVs</button>
+          <button id="syncStaffingBtn" class="batch-btn hidden" title="Sync employees and positions from Staffing API">Sync Staffing</button>
           <input id="batchFileInput" type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" style="display:none" />
           <input id="batchSearch" class="batch-search" type="search" placeholder="Search…" autocomplete="off" />
           <select id="batchJDSelect" class="prompt-select" style="max-width:200px"><option value="">— No JD —</option></select>
@@ -860,6 +861,10 @@
         });
         var userEl = document.getElementById("statUser");
         if (userEl && _authUser.name) userEl.textContent = _authUser.name + " |";
+        if (_authUser.role === "admin") {
+          var syncBtn = document.getElementById("syncStaffingBtn");
+          if (syncBtn) syncBtn.classList.remove("hidden");
+        }
         // Wrap localStorage with user-scoped prefix
         var _prefix = "qcv_" + (_authUser.email || "anon") + "_";
         var _realLS = window.localStorage;
@@ -3406,6 +3411,56 @@
     });
     batchBtns.generate.addEventListener("click", function() { batchAction("generate", { anonymize: batchAnonCheck.checked }); });
     batchBtns.del.addEventListener("click", function() { batchAction("delete"); });
+
+    /* ── Staffing API Sync (admin only) ── */
+    var syncStaffingBtn = document.getElementById("syncStaffingBtn");
+    if (syncStaffingBtn) {
+      syncStaffingBtn.addEventListener("click", async function() {
+        try {
+          var cfg = await (await fetch("/admin/staffing/config")).json();
+          var url = cfg.url || "";
+          var needsUrl = !url;
+          var needsToken = !cfg.has_token;
+          if (needsUrl || needsToken) {
+            var newUrl = prompt("Staffing API base URL:", url || "https://qa-staffing-api.qtidev.com");
+            if (!newUrl) return;
+            var newTok = prompt("Staffing API JWT token" + (cfg.has_token ? " (leave empty to keep current)" : ":"), "");
+            if (needsToken && !newTok) return;
+            var save = await fetch("/admin/staffing/config", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: newUrl.trim(), token: (newTok || "").trim() })
+            });
+            if (!save.ok) { alert("Failed to save config"); return; }
+            url = newUrl.trim();
+          }
+          if (!confirm("Fetch fresh employees + positions from " + url + " ?\nThis will overwrite _employees.json and _positions.json.")) return;
+          syncStaffingBtn.disabled = true;
+          syncStaffingBtn.textContent = "Syncing…";
+          appLog("Staffing sync started");
+          var r = await fetch("/admin/sync_staffing", { method: "POST" });
+          if (!r.ok) {
+            var err = await r.text();
+            alert("Sync failed: " + err);
+            appLog("Staffing sync failed: " + err, "error");
+          } else {
+            var s = await r.json();
+            appLog("Staffing sync OK: " + s.employees_total + " employees (" +
+              s.employees_active + " active, " + s.employees_dismissed + " dismissed), " +
+              s.positions_total + " positions in " + s.duration_sec + "s");
+            alert("Synced in " + s.duration_sec + "s\n" +
+              "Employees: " + s.employees_total + " (+" + s.employees_added + " / -" + s.employees_removed + ", " + s.employees_status_changed + " status changed)\n" +
+              "Positions: " + s.positions_total + "\nProjects: " + s.projects_fetched);
+            loadBatchStore();
+          }
+        } catch (e) {
+          alert("Error: " + e.message);
+        } finally {
+          syncStaffingBtn.disabled = false;
+          syncStaffingBtn.textContent = "Sync Staffing";
+        }
+      });
+    }
 
     /* ── Batch Import CVs ── */
     var batchImportBtn = document.getElementById("batchImport");
