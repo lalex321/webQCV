@@ -2658,6 +2658,7 @@
         document.querySelectorAll(".admin-subpane").forEach(function(p) { p.classList.add("hidden"); });
         btn.classList.add("active");
         document.getElementById(btn.dataset.subpane).classList.remove("hidden");
+        localStorage.setItem("activeAdminSubtab", btn.dataset.subpane);
         if (btn.dataset.subpane === "adminPrompts" && !promptDataLoaded) loadPrompts();
         if (btn.dataset.subpane === "adminGeneral") loadKeys();
         if (btn.dataset.subpane === "adminUsers") loadUsers();
@@ -2669,6 +2670,21 @@
         }
       });
     });
+
+    /* Restore last active Admin sub-tab */
+    (function restoreAdminSubtab() {
+      var saved = localStorage.getItem("activeAdminSubtab");
+      if (!saved || saved === "adminGeneral") return;  // General is default
+      var btn = document.querySelector('.admin-subtab-btn[data-subpane="' + saved + '"]');
+      if (btn) {
+        document.querySelectorAll(".admin-subtab-btn").forEach(function(b) { b.classList.remove("active"); });
+        document.querySelectorAll(".admin-subpane").forEach(function(p) { p.classList.add("hidden"); });
+        btn.classList.add("active");
+        document.getElementById(saved).classList.remove("hidden");
+      } else {
+        localStorage.removeItem("activeAdminSubtab");
+      }
+    })();
 
 
     /* ── JD Store ── */
