@@ -912,7 +912,8 @@ class QCVWebEngine:
             doc.save(str(docx_path))
             return
 
-        # Build table XML directly — avoids python-docx add_table + move issues
+        # Build table XML directly — avoids python-docx add_table + move issues.
+        # w:noWrap on the period cell keeps "Jan 2025 — Dec 2025" on a single line.
         ns = nsdecls("w")
         row_xml_parts = []
         for rd in rows:
@@ -920,7 +921,8 @@ class QCVWebEngine:
             detail = _esc(rd.get("detail", ""))
             row_xml_parts.append(
                 f'<w:tr {ns}>'
-                f'<w:tc><w:p><w:r><w:rPr><w:b/><w:color w:val="2563EB"/>'
+                f'<w:tc><w:tcPr><w:noWrap/></w:tcPr>'
+                f'<w:p><w:r><w:rPr><w:b/><w:color w:val="2563EB"/>'
                 f'<w:sz w:val="22"/></w:rPr>'
                 f'<w:t xml:space="preserve">{period}</w:t></w:r></w:p></w:tc>'
                 f'<w:tc><w:p><w:r><w:rPr><w:color w:val="2563EB"/>'
