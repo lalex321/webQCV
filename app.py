@@ -319,11 +319,26 @@ def admin_usage_data(request: Request):
     _auth.require_role(_auth.ADMIN)(request)
     events = _read_usage_events()
 
+    # Legacy "failed" entries with these error markers were actually gap-only reviews,
+    # not real failures. Treat them as gap_only_done at read time so prod logs that predate
+    # the gap_only_done event type still classify correctly.
+    _LEGACY_GAP_ONLY_MARKERS = ("Gap analysis timed out", "Job cancelled by user")
+
+    def _is_legacy_gap_only(e: dict) -> bool:
+        if e.get("event") != "failed":
+            return False
+        err = e.get("error", "") or ""
+        return any(m in err for m in _LEGACY_GAP_ONLY_MARKERS)
+
     started = [e for e in events if e.get("event") == "started"]
     done = [e for e in events if e.get("event") == "done"]
-    failed = [e for e in events if e.get("event") == "failed"]
+    failed = [e for e in events if e.get("event") == "failed" and not _is_legacy_gap_only(e)]
+    gap_only = [
+        e for e in events
+        if e.get("event") == "gap_only_done" or _is_legacy_gap_only(e)
+    ]
 
-    # Durations
+    # Durations (only full DOCX jobs contribute; gap-only is typically instant)
     durations = [e["duration_sec"] for e in done if e.get("duration_sec")]
     avg_dur = round(sum(durations) / len(durations), 1) if durations else 0
 
@@ -387,21 +402,28 @@ def admin_usage_data(request: Request):
         for e in reversed(failed)
     ][:20]
 
-    # Recent events (last 100)
+    # Recent events (last 100). Normalise legacy gap-timeout/cancel entries to gap_only_done
+    # so the UI badge reflects the current taxonomy even on un-migrated logs.
+    def _event_label(e: dict) -> str:
+        return "gap_only_done" if _is_legacy_gap_only(e) else e.get("event", "")
+
     recent = [
-        {"ts": e.get("ts", ""), "event": e.get("event", ""), "user": e.get("user", ""),
+        {"ts": e.get("ts", ""), "event": _event_label(e), "user": e.get("user", ""),
          "file": e.get("file", ""), "template": e.get("template", ""),
          "duration": e.get("duration_sec", ""), "tailor": e.get("tailor", False),
-         "error": e.get("error", "")}
+         "error": "" if _is_legacy_gap_only(e) else e.get("error", "")}
         for e in reversed(events)
     ][:100]
 
+    # Success includes both full DOCX generation (done) and gap-only reviews (gap_only_done).
+    success_count = len(done) + len(gap_only)
     return {
         "summary": {
             "total": len(started), "done": len(done), "failed": len(failed),
+            "gap_only": len(gap_only),
             "today": today_jobs, "week": week_jobs,
             "unique_users": unique_users, "avg_duration": avg_dur,
-            "success_rate": round(len(done) / total * 100, 1),
+            "success_rate": round(success_count / total * 100, 1),
         },
         "daily": [{"date": d, **c} for d, c in daily],
         "hours": hours,
@@ -2146,6 +2168,7 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
                 if job:
                     setattr(job, "_gap_analysis", gap_result)
                     setattr(job, "_pause_event", pause_event)
+                    setattr(job, "_reached_pause", True)
                     if base_json:
                         setattr(job, "_cv_json", base_json)
                         # Early save to store — CV available before DOCX generation
@@ -2284,6 +2307,30 @@ def _run_job(job_id: str, source_path: Path, workdir: Path, anonymize: bool, aut
             "duration_sec": round(time.time() - started_at, 2),
         })
     except Exception as e:
+        # If the job had already delivered gap analysis (user got their Fit Report)
+        # and then walked away or cancelled, that's a legitimate "gap-only" outcome,
+        # not a failure. The gap data is already persisted to the store.
+        job = jobs.get(job_id)
+        reached_pause = bool(job and getattr(job, "_reached_pause", False))
+        err_str = str(e)
+        is_gap_only = reached_pause and (
+            "timed out" in err_str
+            or "cancelled" in err_str.lower()
+            or "Cancelled" in err_str
+        )
+        if is_gap_only:
+            jobs.update(job_id, status="Analyzed", progress=100, error="")
+            append_usage({
+                "event": "gap_only_done",
+                "job_id": job_id,
+                "ip": client_ip,
+                "user": user_email,
+                "file": source_path.name,
+                "template": template_name,
+                "tailor": tailor,
+                "duration_sec": round(time.time() - started_at, 2),
+            })
+            return
         jobs.update(job_id, status="Failed", progress=100, error=str(e))
         append_usage({
             "event": "failed",

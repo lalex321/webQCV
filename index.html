@@ -3828,11 +3828,12 @@
         '<div style="background:'+(color||"#3b82f6")+';height:100%;border-radius:3px;width:'+pct+'%"></div></div>';
     }
     function _usageBadge(ev) {
-      var bg = "#f3f4f6", fg = "#374151";
+      var bg = "#f3f4f6", fg = "#374151", label = ev;
       if (ev === "done") { bg = "#dcfce7"; fg = "#166534"; }
       else if (ev === "failed") { bg = "#fee2e2"; fg = "#991b1b"; }
       else if (ev === "started") { bg = "#dbeafe"; fg = "#1e40af"; }
-      return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;background:'+bg+';color:'+fg+'">'+_usageEsc(ev)+'</span>';
+      else if (ev === "gap_only_done") { bg = "#e0e7ff"; fg = "#3730a3"; label = "gap-only"; }
+      return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;background:'+bg+';color:'+fg+'">'+_usageEsc(label)+'</span>';
     }
     function renderUsage(d) {
       var s = d.summary;
@@ -3841,6 +3842,7 @@
         {label:"Today", value:s.today, color:"#3b82f6"},
         {label:"This Week", value:s.week, color:"#3b82f6"},
         {label:"Done", value:s.done, color:"#22c55e", sub:"success rate: "+s.success_rate+"%"},
+        {label:"Gap-Only", value:s.gap_only || 0, color:"#4f46e5"},
         {label:"Failed", value:s.failed, color:"#ef4444"},
         {label:"Users", value:s.unique_users, color:"#1e293b"},
         {label:"Avg Duration", value:s.avg_duration+"s", color:"#1e293b"},
