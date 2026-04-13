@@ -416,12 +416,6 @@ def admin_usage_data(request: Request):
     }
 
 
-@app.get("/admin/usage", response_class=HTMLResponse)
-def admin_usage(request: Request):
-    _auth.require_role(_auth.ADMIN)(request)
-    return HTMLResponse((Path(__file__).parent / "templates" / "admin_usage.html").read_text(encoding="utf-8"))
-
-
 @app.get("/admin/prompts")
 def get_prompts(request: Request):
     _auth.require_role(_auth.ADMIN)(request)
@@ -1008,13 +1002,6 @@ def auth_delete_user(email: str, request: Request):
     return {"ok": True}
 
 
-@app.get("/admin/users", response_class=HTMLResponse)
-def admin_users_page(request: Request):
-    _auth.require_role(_auth.ADMIN)(request)
-    p = APP_DIR / "templates" / "admin_users.html"
-    return RawResponse(content=p.read_bytes(), media_type="text/html")
-
-
 @app.post("/admin/upload_data")
 async def admin_upload_data(request: Request, file: UploadFile = File(...)):
     """Upload a zip archive to restore _store/, _jd_store/, _cache/ into DATA_DIR."""
@@ -1271,24 +1258,40 @@ def admin_get_keys(request: Request):
 
 @app.put("/admin/keys")
 async def admin_put_keys(request: Request):
-    """Update one or more admin-managed keys. Empty strings are ignored (keep current)."""
+    """Update admin-managed keys.
+
+    Semantics per field: key absent from body → keep current; empty string → clear;
+    non-empty string → set. Frontend sends only dirty fields.
+    """
     _auth.require_role(_auth.ADMIN)(request)
     body = await request.json()
-    gemini = (body.get("gemini") or "").strip()
-    github = (body.get("github") or "").strip()
-    # Treat empty string as "keep current" for all fields (match Gemini/GitHub behavior).
-    staffing_url = (body.get("staffing_url") or "").strip()
-    staffing_token = (body.get("staffing_token") or "").strip()
 
-    if gemini:
-        (APP_DIR / ".api_key").write_text(gemini, encoding="utf-8")
-    if github:
-        (APP_DIR / ".github_token").write_text(github, encoding="utf-8")
-    if staffing_url or staffing_token:
+    def _norm(v):
+        # Only strings participate; non-string → "absent".
+        return v.strip() if isinstance(v, str) else None
+
+    gemini = _norm(body.get("gemini"))
+    github = _norm(body.get("github"))
+    staffing_url = _norm(body.get("staffing_url"))
+    staffing_token = _norm(body.get("staffing_token"))
+
+    if gemini is not None:
+        p = APP_DIR / ".api_key"
+        if gemini:
+            p.write_text(gemini, encoding="utf-8")
+        elif p.exists():
+            p.unlink()
+    if github is not None:
+        p = APP_DIR / ".github_token"
+        if github:
+            p.write_text(github, encoding="utf-8")
+        elif p.exists():
+            p.unlink()
+    if staffing_url is not None or staffing_token is not None:
         cfg = _core.load_config()
-        if staffing_url:
+        if staffing_url is not None:
             cfg["staffing_api_url"] = staffing_url
-        if staffing_token:
+        if staffing_token is not None:
             cfg["staffing_api_token"] = staffing_token
         _core.save_config(cfg)
     return {"ok": True}

@@ -4016,12 +4016,16 @@
     if (keysSaveBtn) {
       keysSaveBtn.addEventListener("click", async function() {
         keysStatus.textContent = "Saving…";
-        var body = {
-          staffing_url: document.getElementById("keyStaffingUrl").value.trim(),
-          staffing_token: document.getElementById("keyStaffingToken").value.trim(),
-          gemini: document.getElementById("keyGemini").value.trim(),
-          github: document.getElementById("keyGithub").value.trim(),
-        };
+        // Send only non-empty fields; backend leaves omitted fields untouched.
+        var body = {};
+        var url = document.getElementById("keyStaffingUrl").value.trim();
+        if (url) body.staffing_url = url;
+        var tok = document.getElementById("keyStaffingToken").value.trim();
+        if (tok) body.staffing_token = tok;
+        var gem = document.getElementById("keyGemini").value.trim();
+        if (gem) body.gemini = gem;
+        var gh = document.getElementById("keyGithub").value.trim();
+        if (gh) body.github = gh;
         try {
           var r = await fetch("/admin/keys", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
           if (!r.ok) { keysStatus.textContent = "Error: " + (await r.text()); return; }
@@ -4558,7 +4562,12 @@
       }
       if (savedTab && savedTab !== "paneConvert") {
         var tabBtn = document.querySelector('[data-pane="' + savedTab + '"]');
-        if (tabBtn) tabBtn.click();
+        if (tabBtn) {
+          tabBtn.click();
+        } else {
+          // Saved tab no longer exists for this role (e.g. non-admin with stale paneAdmin).
+          localStorage.removeItem("activeTab");
+        }
       }
 
     })();

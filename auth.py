@@ -82,7 +82,9 @@ def _load_users() -> list[dict]:
                     dirty = True
             _users_cache = users
             if dirty:
-                p.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+                tmp = p.with_suffix(p.suffix + ".new")
+                tmp.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, p)
         else:
             _users_cache = []
         return _users_cache
@@ -92,7 +94,10 @@ def _save_users(users: list[dict]):
     global _users_cache
     with _USERS_LOCK:
         _users_cache = users
-        _users_path().write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+        p = _users_path()
+        tmp = p.with_suffix(p.suffix + ".new")
+        tmp.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
 
 
 def _seed_admin():
