@@ -2089,6 +2089,24 @@ def _run_batch_analyze(job_id: str, store_id: str, cv_json: dict, jd_text: str, 
         _JOB_SEMAPHORE.release()
 
 
+def _employee_has_positions(name: str) -> bool:
+    """Lightweight check used by UI to decide whether to show Add Projects."""
+    if not name or not _positions_cache:
+        return False
+    name_lower = name.lower()
+    return any(
+        (p.get("employee_name") or "").lower() == name_lower
+        for p in _positions_cache
+    )
+
+
+@app.get("/positions/employee_has")
+def employee_has_positions(request: Request, name: str = ""):
+    """Return whether the given employee name has any positions in staffing data."""
+    _auth.require_auth(request)
+    return {"has": _employee_has_positions(name)}
+
+
 def _build_projects_section(cv_data: dict) -> list[dict] | None:
     """Build 'Projects (Quantori Staffing)' section from positions data."""
     if not _positions_cache:

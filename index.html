@@ -619,7 +619,7 @@
             </div>
           </div>
 
-          <div class="field">
+          <div class="field" id="addProjectsField">
             <div class="check-card">
               <label style="color:#2563eb"><input id="addProjects" type="checkbox" /> Add Projects</label>
             </div>
@@ -1107,6 +1107,27 @@
     const templateSelect = document.getElementById("template");
     const anonymizeInput = document.getElementById("anonymize");
     const addProjectsInput = document.getElementById("addProjects");
+    const addProjectsField = document.getElementById("addProjectsField");
+
+    async function updateAddProjectsVisibility(candidateName) {
+      // Hide Add Projects for candidates not present in staffing data.
+      // Empty name → default to visible (fresh upload, no info yet).
+      if (!candidateName) {
+        addProjectsField.classList.remove("hidden");
+        return;
+      }
+      try {
+        var r = await fetch("/positions/employee_has?name=" + encodeURIComponent(candidateName));
+        if (!r.ok) { addProjectsField.classList.remove("hidden"); return; }
+        var d = await r.json();
+        if (d.has) {
+          addProjectsField.classList.remove("hidden");
+        } else {
+          addProjectsField.classList.add("hidden");
+          if (addProjectsInput.checked) addProjectsInput.checked = false;
+        }
+      } catch(e) { addProjectsField.classList.remove("hidden"); }
+    }
     const tailorInput = document.getElementById("tailor");
     const warnJsonInput = document.getElementById("warnJson");
     const jdField = document.getElementById("jdField");
@@ -1648,6 +1669,9 @@
       reader.onload = function(e) {
         try {
           const raw = JSON.parse(e.target.result);
+          // JSON upload exposes basics.name immediately — check positions right away.
+          var jsonName = (raw && raw.basics && raw.basics.name) || "";
+          if (jsonName) updateAddProjectsVisibility(jsonName);
           const fitSession = raw._fit_session;
           if (fitSession) {
             preloadedFitJson = { gap_analysis: fitSession.gap_analysis, user_edits: fitSession.user_edits };
@@ -2508,6 +2532,8 @@
         preloadedFitJson = null;
         currentStoreId = null;
         resetForNewInput();
+        // Fresh upload: name unknown until extraction — default to visible.
+        addProjectsField.classList.remove("hidden");
         const ext = lastSelectedFile.name.split(".").pop().toLowerCase();
         if (ext === "json") {
           handleJsonCvUpload(lastSelectedFile);
@@ -4179,6 +4205,7 @@
 
         statusBarFile.textContent = data._meta && data._meta.name || "";
         appLog("Loaded CV from store: " + (data._meta && data._meta.name || storeId.substring(0, 8)));
+        updateAddProjectsVisibility((data._meta && data._meta.name) || "");
       } catch (e) {
         alert("Error: " + e.message);
       }
@@ -4227,6 +4254,7 @@
         statusValue.textContent = "Ready"; progressBar.style.width = "0%";
         statusBarFile.textContent = data._meta && data._meta.name || "";
         setPrimaryAction("idle");
+        updateAddProjectsVisibility((data._meta && data._meta.name) || "");
 
         // Force tailor mode ON when opening a session with gap data — user's intent is to see the fit
         tailorInput.checked = !!gapData;
