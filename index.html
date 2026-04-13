@@ -3881,10 +3881,10 @@
       _usageCharts.options = new Chart(document.getElementById("usageOptionsChart"), {
         type: "doughnut",
         data: {
-          labels: ["Tailor", "Anonymize", "Autofix", "Plain"],
+          labels: ["Tailor", "Anonymize", "Plain"],
           datasets: [{
-            data: [opt.tailor, opt.anonymize, opt.autofix, Math.max(0, opt.total - opt.tailor - opt.anonymize - opt.autofix)],
-            backgroundColor: ["#8b5cf6", "#f59e0b", "#06b6d4", "#d1d5db"]
+            data: [opt.tailor, opt.anonymize, Math.max(0, opt.total - opt.tailor - opt.anonymize)],
+            backgroundColor: ["#8b5cf6", "#f59e0b", "#d1d5db"]
           }]
         },
         options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{position:"bottom",labels:{font:{size:11}}}}}
